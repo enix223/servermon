@@ -9,6 +9,10 @@ The app is structured as a multi-module console:
 - **Kubernetes** → Pods, Clusters
 - **Alibaba Cloud** → ECS servers (layout placeholder; integration is planned)
 
+<p align="center">
+  <img src="docs/images/dashboard.png" alt="ServerMon dashboard showing pod status across three Kubernetes clusters" width="100%">
+</p>
+
 ## Highlights
 
 - **Multiple clusters, one window** — a tab per cluster with live pod and issue counts.
@@ -32,8 +36,40 @@ The app is structured as a multi-module console:
   repository port. Both can be swapped without touching the UI or the use-case layer.
 - **In-app upgrades** — Settings → Application updates checks for a newer version, shows release
   notes and download progress, and can restart/install the update.
-- **Configurable polling interval** — Settings → Monitoring controls the refresh interval for all
-  clusters. It is persisted in the SQLite `settings` table.
+- **Persisted preferences** — the refresh interval is stored in the SQLite `settings` table.
+
+## Screenshots
+
+Screenshots were captured against three demo clusters reporting Kubernetes 1.29.8, 1.31.4, and
+1.35.1.
+
+<table>
+  <tr>
+    <td width="50%">
+      <img src="docs/images/clusters.png" alt="Cluster connections page" width="100%">
+      <br>
+      <sub><b>Connections</b> — kubeconfig and bearer-token auth with live versions</sub>
+    </td>
+    <td width="50%">
+      <img src="docs/images/add-cluster.png" alt="Add cluster dialog" width="100%">
+      <br>
+      <sub><b>Add a cluster</b> — kubeconfig file, or API server plus token</sub>
+    </td>
+  </tr>
+</table>
+
+<p align="center">
+  <img src="docs/images/settings.png" alt="Settings page showing the refresh interval" width="100%">
+  <br>
+  <sub><b>Settings</b> — global refresh interval persisted to SQLite, plus application updates</sub>
+</p>
+
+<details>
+<summary><b>Responsive layout</b> (click to expand)</summary>
+
+![Responsive layout with a collapsed sidebar](docs/images/responsive.png)
+
+</details>
 
 ## Requirements
 
@@ -73,6 +109,7 @@ npm run dev        # Electron + Vite with hot reload
 npm run typecheck  # main/preload and renderer TypeScript checks
 npm run build      # production build into out/
 npm start          # run the production build
+npm run demo:images # regenerate the README screenshots (mock Kubernetes clusters)
 ```
 
 If the Electron binary was not downloaded by `npm install` (npm 11 can skip install scripts):
@@ -325,7 +362,7 @@ src/
   renderer/
     src/App.tsx
     src/data/{ApiContext,electronApi}.tsx|ts
-    src/components/{Sidebar,TopBar,ClusterTabs,PodsView,PodTable,ConfigPage,ClusterForm,AliyunEcsPage,…}
+    src/components/{Sidebar,TopBar,ClusterTabs,PodsView,PodTable,ConfigPage,ClusterForm,SettingsPage,AliyunEcsPage,…}
     src/lib/{navigation,format,pods,ui}.ts
     src/styles.css
   shared/
@@ -334,6 +371,8 @@ src/
 scripts/
   mock-k8s-server.mjs
   e2e.mjs
+  capture-demo.mjs
+docs/images/        README screenshots
 ```
 
 ## Notes and limitations

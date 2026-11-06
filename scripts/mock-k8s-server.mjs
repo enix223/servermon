@@ -2,6 +2,9 @@ import { createServer } from 'node:http'
 
 const TOKEN = process.env.MOCK_TOKEN || 'test-token'
 const requestedPort = Number(process.env.MOCK_PORT || 0)
+const VERSION = process.env.MOCK_VERSION || 'v1.31.4'
+const PROFILE = process.env.MOCK_PROFILE || 'full'
+const SEMVER = VERSION.replace(/^v/, '').split('.')
 
 const startedAt = Date.now()
 const iso = (msAgo) => new Date(startedAt - msAgo).toISOString()
@@ -187,9 +190,9 @@ const server = createServer((request, response) => {
   if (url.pathname === '/version') {
     stats.versionRequests += 1
     send(response, 200, {
-      major: '1',
-      minor: '31',
-      gitVersion: 'v1.31.4',
+      major: SEMVER[0] ?? '1',
+      minor: SEMVER[1] ?? '31',
+      gitVersion: VERSION,
       gitCommit: '948afe5ca072329a73c8e79ed5934778f52141ac',
       gitTreeState: 'clean',
       buildDate: '2024-09-11T21:24:43Z',
@@ -202,12 +205,22 @@ const server = createServer((request, response) => {
 
   if (url.pathname === '/api/v1/pods' && request.method === 'GET') {
     stats.podsRequests += 1
+    const items =
+      PROFILE === 'healthy'
+        ? pods.filter((pod) => {
+            if (pod.metadata.deletionTimestamp) return false
+            if (pod.status.phase !== 'Running' && pod.status.phase !== 'Succeeded') return false
+            return !pod.status.containerStatuses?.some((status) => status.state?.waiting)
+          })
+        : PROFILE === 'small'
+          ? pods.slice(0, 5)
+          : pods
     setTimeout(() => {
       send(response, 200, {
         kind: 'PodList',
         apiVersion: 'v1',
         metadata: { resourceVersion: '1042' },
-        items: pods
+        items
       })
     }, 40)
     return
@@ -225,7 +238,9 @@ const server = createServer((request, response) => {
 
 server.listen(requestedPort, '127.0.0.1', () => {
   const address = server.address()
-  console.log(`mock-k8s listening on http://127.0.0.1:${address.port}`)
+  console.log(
+    `mock-k8s listening on http://127.0.0.1:${address.port} (${VERSION}, ${PROFILE})`
+  )
   console.log(`mock-k8s bearer token: ${TOKEN}`)
 })
 
