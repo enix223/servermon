@@ -22,7 +22,10 @@ export const NAV_GROUPS: NavGroup[] = [
   },
   {
     label: 'Alibaba Cloud',
-    items: [{ id: 'aliyun-ecs', label: 'ECS servers', badge: 'Soon' }]
+    items: [
+      { id: 'aliyun-ecs', label: 'ECS servers' },
+      { id: 'aliyun-profiles', label: 'Profiles' }
+    ]
   },
   {
     label: 'Application',
@@ -34,5 +37,6 @@ export const PAGE_META: Record<PageId, { module: string; title: string }> = {
   'k8s-pods': { module: 'Kubernetes', title: 'Pods' },
   'k8s-clusters': { module: 'Kubernetes', title: 'Clusters' },
   'aliyun-ecs': { module: 'Alibaba Cloud', title: 'ECS servers' },
+  'aliyun-profiles': { module: 'Alibaba Cloud', title: 'Profiles' },
   settings: { module: 'Application', title: 'Settings' }
 }

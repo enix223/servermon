@@ -5,16 +5,22 @@ import { Sidebar } from './components/Sidebar'
 import { ClusterTabs } from './components/ClusterTabs'
 import { PodsView } from './components/PodsView'
 import { ConfigPage } from './components/ConfigPage'
-import { AliyunEcsPage } from './components/AliyunEcsPage'
+import { EcsProfileTabs } from './components/EcsProfileTabs'
+import { EcsInstancesView } from './components/EcsInstancesView'
+import { EcsProfilesPage } from './components/EcsProfilesPage'
 import { SettingsPage } from './components/SettingsPage'
 import { Toasts } from './components/Toasts'
-import { LayersIcon, PlusIcon, SpinnerIcon } from './components/Icons'
+import { CloudIcon, LayersIcon, PlusIcon, SpinnerIcon } from './components/Icons'
 import { useApi } from './data/ApiContext'
 import { errorMessage, pluralize } from './lib/format'
 import { PAGE_META } from './lib/navigation'
+import { useEcsMonitor } from './lib/useEcsMonitor'
 import type { PageId, ToastItem, ToastTone } from './lib/ui'
 
-const DEFAULT_SETTINGS: AppSettings = { refreshIntervalSeconds: 5 }
+const DEFAULT_SETTINGS: AppSettings = {
+  refreshIntervalSeconds: 5,
+  ecsRefreshIntervalSeconds: 60
+}
 
 export default function App() {
   const api = useApi()
@@ -113,6 +119,14 @@ export default function App() {
     if (!clusterIdsKey) return
     for (const id of clusterIdsKey.split(',')) void fetchCluster(Number(id))
   }, [clusterIdsKey, fetchCluster])
+
+  // The Alibaba Cloud module keeps its own state, mirroring the Kubernetes one.
+  const ecsEnabled = page === 'aliyun-ecs' || page === 'aliyun-profiles'
+  const ecs = useEcsMonitor({
+    enabled: ecsEnabled,
+    autoRefresh,
+    refreshIntervalSeconds: settings.ecsRefreshIntervalSeconds
+  })
 
   useEffect(() => {
     void loadClusters()
@@ -262,6 +276,78 @@ export default function App() {
     )
   }
 
+  function renderEcsContent() {
+    if (ecs.loading) {
+      return (
+        <div className="empty-card">
+          <div className="empty-icon">
+            <SpinnerIcon size={26} />
+          </div>
+          <h2 className="m-0 text-[17px] font-semibold">Loading Alibaba Cloud profiles…</h2>
+        </div>
+      )
+    }
+
+    if (ecs.loadError && ecs.profiles.length === 0) {
+      return (
+        <div className="empty-card">
+          <div className="empty-icon error">
+            <CloudIcon size={30} />
+          </div>
+          <h2 className="m-0 text-[17px] font-semibold">Could not load Alibaba Cloud profiles</h2>
+          <p className="mx-auto mt-2 mb-5 max-w-[400px] text-[12.5px] leading-[1.55] text-muted">
+            {ecs.loadError}
+          </p>
+          <button type="button" className="btn" onClick={() => void ecs.reload()}>
+            Try again
+          </button>
+        </div>
+      )
+    }
+
+    if (ecs.profiles.length === 0) {
+      return (
+        <div className="empty-card">
+          <div className="empty-icon">
+            <CloudIcon size={30} />
+          </div>
+          <h2 className="m-0 text-[17px] font-semibold">No Alibaba Cloud profiles</h2>
+          <p className="mx-auto mt-2 mb-5 max-w-[440px] text-[12.5px] leading-[1.55] text-muted">
+            Add a profile with a RAM AccessKey and a region to list ECS instances through the
+            Alibaba Cloud OpenAPI. Add as many profiles as you need.
+          </p>
+          <button
+            type="button"
+            className="btn btn-primary"
+            onClick={() => setPage('aliyun-profiles')}
+          >
+            <PlusIcon />
+            Add your first profile
+          </button>
+        </div>
+      )
+    }
+
+    if (!ecs.activeProfile) {
+      return (
+        <div className="empty-card">
+          <h2 className="m-0 text-[17px] font-semibold">Select a profile</h2>
+        </div>
+      )
+    }
+
+    return (
+      <EcsInstancesView
+        key={ecs.activeProfile.id}
+        profile={ecs.activeProfile}
+        result={ecs.results[ecs.activeProfile.id]}
+        fetching={ecs.refreshingActive}
+        autoRefresh={autoRefresh}
+        refreshIntervalSeconds={settings.ecsRefreshIntervalSeconds}
+      />
+    )
+  }
+
   return (
     <div className="app-bg flex h-screen">
       <Sidebar
@@ -275,12 +361,19 @@ export default function App() {
         <TopBar
           moduleLabel={PAGE_META[page].module}
           pageLabel={PAGE_META[page].title}
-          showControls={page !== 'aliyun-ecs'}
-          refreshIntervalSeconds={settings.refreshIntervalSeconds}
+          showControls={true}
+          refreshIntervalSeconds={
+            page === 'aliyun-ecs' || page === 'aliyun-profiles'
+              ? settings.ecsRefreshIntervalSeconds
+              : settings.refreshIntervalSeconds
+          }
           autoRefresh={autoRefresh}
           onToggleAutoRefresh={() => setAutoRefresh((value) => !value)}
-          onRefresh={refreshAll}
-          refreshing={refreshing}
+          onRefresh={() => {
+            refreshAll()
+            ecs.refreshAll()
+          }}
+          refreshing={refreshing || ecs.refreshing}
         />
 
         <main className="flex min-h-0 flex-1 flex-col">
@@ -321,13 +414,46 @@ export default function App() {
                 refreshIntervalSeconds={settings.refreshIntervalSeconds}
               />
             </div>
-          ) : page === 'settings' ? (
+          ) : page === 'aliyun-ecs' ? (
+            <>
+              {ecs.profiles.length > 0 && (
+                <EcsProfileTabs
+                  profiles={ecs.profiles}
+                  activeId={ecs.activeId}
+                  results={ecs.results}
+                  onSelect={ecs.select}
+                  onAddProfile={() => setPage('aliyun-profiles')}
+                />
+              )}
+              <div className="min-h-0 flex-1 overflow-auto">
+                {ecs.profiles.length > 0 && (
+                  <div
+                    className="mx-auto flex max-w-[1680px] items-center gap-[7px] px-[22px] pt-2.5 text-[11px] text-dim"
+                    aria-label="Alibaba Cloud fleet summary"
+                  >
+                    <span className={`status-dot ${ecs.fleetTone}`} />
+                    {ecs.polledCount === 0
+                      ? `Monitoring ${pluralize(ecs.profiles.length, 'profile')} · refresh every ${settings.ecsRefreshIntervalSeconds}s`
+                      : `${ecs.connectedCount} of ${pluralize(ecs.profiles.length, 'profile')} connected`}
+                    {ecs.loadError && <span className="text-err"> · {ecs.loadError}</span>}
+                  </div>
+                )}
+                {renderEcsContent()}
+              </div>
+            </>
+          ) : page === 'aliyun-profiles' ? (
             <div className="min-h-0 flex-1 overflow-auto">
-              <SettingsPage settings={settings} onSaved={setSettings} toast={toast} />
+              <EcsProfilesPage
+                profiles={ecs.profiles}
+                results={ecs.results}
+                onChanged={ecs.reload}
+                toast={toast}
+                refreshIntervalSeconds={settings.ecsRefreshIntervalSeconds}
+              />
             </div>
           ) : (
             <div className="min-h-0 flex-1 overflow-auto">
-              <AliyunEcsPage onBack={() => setPage('k8s-pods')} />
+              <SettingsPage settings={settings} onSaved={setSettings} toast={toast} />
             </div>
           )}
         </main>

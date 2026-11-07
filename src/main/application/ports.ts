@@ -1,5 +1,12 @@
-import type { ConnectionTestResult, PodsResult, UpdateState } from '@shared/types'
+import type {
+  ConnectionTestResult,
+  EcsConnectionTestResult,
+  EcsInstancesResult,
+  PodsResult,
+  UpdateState
+} from '@shared/types'
 import type { ClusterDraft, ClusterEntity } from '../domain/cluster'
+import type { EcsProfileDraft, EcsProfileEntity } from '../domain/ecsProfile'
 
 /**
  * Persistence port for cluster connections (Repository pattern).
@@ -39,6 +46,37 @@ export interface ClusterMonitor {
   listPods(cluster: ClusterEntity): Promise<PodsResult>
   /** Drops cached clients/version info after a connection is edited or removed. */
   invalidate(clusterId: number): void
+}
+
+/**
+ * Persistence port for Alibaba Cloud ECS connection profiles (Repository
+ * pattern). The ECS module mirrors the Kubernetes module: one row per
+ * profile, many instances per profile.
+ *
+ * Implementations:
+ *  - SqliteEcsProfileRepository (desktop)
+ *  - a future PostgresEcsProfileRepository for the web deployment
+ */
+export interface EcsProfileRepository {
+  findAll(): EcsProfileEntity[]
+  findById(id: number): EcsProfileEntity | null
+  insert(profile: EcsProfileDraft): EcsProfileEntity
+  update(id: number, profile: EcsProfileDraft): void
+  delete(id: number): void
+}
+
+/**
+ * Outbound port for live Alibaba Cloud ECS communication.
+ *
+ * Implementations:
+ *  - AliyunEcsMonitor (desktop main process)
+ *  - the same implementation can run on the web backend unchanged
+ */
+export interface EcsMonitor {
+  testConnection(profile: EcsProfileEntity): Promise<EcsConnectionTestResult>
+  listInstances(profile: EcsProfileEntity): Promise<EcsInstancesResult>
+  /** Drops cached clients after a profile is edited or removed. */
+  invalidate(profileId: number): void
 }
 
 /**

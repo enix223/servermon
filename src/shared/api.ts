@@ -4,6 +4,10 @@ import type {
   ClusterInput,
   ClusterRecord,
   ConnectionTestResult,
+  EcsConnectionTestResult,
+  EcsInstancesResult,
+  EcsProfileInput,
+  EcsProfileRecord,
   PodsResult,
   UpdateState
 } from './types'
@@ -22,6 +26,12 @@ import type {
  *   DELETE /api/clusters/:id
  *   POST   /api/clusters/test
  *   GET    /api/clusters/:id/pods
+ *   GET    /api/ecs/profiles
+ *   POST   /api/ecs/profiles
+ *   PUT    /api/ecs/profiles/:id
+ *   DELETE /api/ecs/profiles/:id
+ *   POST   /api/ecs/profiles/test
+ *   GET    /api/ecs/profiles/:id/instances
  *   GET    /api/settings
  *   PUT    /api/settings
  *   GET    /api/updates
@@ -38,6 +48,18 @@ export interface ServermonApi {
    */
   testCluster(input: ClusterInput, existingId?: number): Promise<ConnectionTestResult>
   listPods(clusterId: number): Promise<PodsResult>
+
+  listEcsProfiles(): Promise<EcsProfileRecord[]>
+  createEcsProfile(input: EcsProfileInput): Promise<EcsProfileRecord>
+  updateEcsProfile(id: number, input: EcsProfileInput): Promise<EcsProfileRecord>
+  deleteEcsProfile(id: number): Promise<void>
+  /**
+   * Tests a draft form. For saved profiles, a blank secret falls back to the
+   * stored one so editing other fields does not require re-entering it.
+   */
+  testEcsProfile(input: EcsProfileInput, existingId?: number): Promise<EcsConnectionTestResult>
+  listEcsInstances(profileId: number): Promise<EcsInstancesResult>
+
   getSettings(): Promise<AppSettings>
   updateSettings(settings: AppSettings): Promise<AppSettings>
   getUpdateState(): Promise<UpdateState>

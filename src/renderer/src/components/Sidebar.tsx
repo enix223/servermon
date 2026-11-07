@@ -1,12 +1,13 @@
 import type { ReactNode } from 'react'
 import { NAV_GROUPS } from '../lib/navigation'
 import type { PageId } from '../lib/ui'
-import { CloudIcon, CubeIcon, GearIcon, LayersIcon, LogoIcon } from './Icons'
+import { CloudIcon, CubeIcon, GearIcon, KeyIcon, LayersIcon, LogoIcon } from './Icons'
 
 const PAGE_ICONS: Record<PageId, ReactNode> = {
   'k8s-pods': <CubeIcon size={16} />,
   'k8s-clusters': <LayersIcon size={16} />,
   'aliyun-ecs': <CloudIcon size={16} />,
+  'aliyun-profiles': <KeyIcon size={16} />,
   settings: <GearIcon size={16} />
 }
 

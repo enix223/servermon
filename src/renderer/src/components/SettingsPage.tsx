@@ -6,6 +6,7 @@ import { errorMessage } from '../lib/format'
 import type { ToastTone } from '../lib/ui'
 
 const PRESETS = [2, 5, 10, 30, 60]
+const ECS_PRESETS = [30, 60, 120, 300, 600]
 
 function formatBytes(bytes: number | null): string {
   if (!bytes || bytes <= 0) return '—'
@@ -85,6 +86,7 @@ interface SettingsPageProps {
 export function SettingsPage({ settings, onSaved, toast }: SettingsPageProps) {
   const api = useApi()
   const [value, setValue] = useState(String(settings.refreshIntervalSeconds))
+  const [ecsValue, setEcsValue] = useState(String(settings.ecsRefreshIntervalSeconds))
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [update, setUpdate] = useState<UpdateState | null>(null)
@@ -93,6 +95,10 @@ export function SettingsPage({ settings, onSaved, toast }: SettingsPageProps) {
   useEffect(() => {
     setValue(String(settings.refreshIntervalSeconds))
   }, [settings.refreshIntervalSeconds])
+
+  useEffect(() => {
+    setEcsValue(String(settings.ecsRefreshIntervalSeconds))
+  }, [settings.ecsRefreshIntervalSeconds])
 
   useEffect(() => {
     let mounted = true
@@ -111,7 +117,9 @@ export function SettingsPage({ settings, onSaved, toast }: SettingsPageProps) {
     }
   }, [api])
 
-  const dirty = value !== String(settings.refreshIntervalSeconds)
+  const dirty =
+    value !== String(settings.refreshIntervalSeconds) ||
+    ecsValue !== String(settings.ecsRefreshIntervalSeconds)
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>): Promise<void> {
     event.preventDefault()
@@ -120,13 +128,24 @@ export function SettingsPage({ settings, onSaved, toast }: SettingsPageProps) {
       setError('Refresh interval must be a whole number between 1 and 3600 seconds.')
       return
     }
+    const ecsInterval = Number(ecsValue)
+    if (!Number.isInteger(ecsInterval) || ecsInterval < 10 || ecsInterval > 3600) {
+      setError('Alibaba Cloud refresh interval must be a whole number between 10 and 3600 seconds.')
+      return
+    }
 
     setError(null)
     setSaving(true)
     try {
-      const updated = await api.updateSettings({ refreshIntervalSeconds: interval })
+      const updated = await api.updateSettings({
+        refreshIntervalSeconds: interval,
+        ecsRefreshIntervalSeconds: ecsInterval
+      })
       onSaved(updated)
-      toast(`Refresh interval set to ${updated.refreshIntervalSeconds}s.`, 'ok')
+      toast(
+        `Refresh interval set to ${updated.refreshIntervalSeconds}s · Alibaba Cloud ${updated.ecsRefreshIntervalSeconds}s.`,
+        'ok'
+      )
     } catch (caught) {
       const message = errorMessage(caught)
       setError(message)
@@ -174,13 +193,13 @@ export function SettingsPage({ settings, onSaved, toast }: SettingsPageProps) {
       >
         <div className="border-b border-line px-5 py-4">
           <h2 className="m-0 text-sm font-semibold">Monitoring</h2>
-          <p className="mt-1 text-xs text-muted">Controls how often every cluster is polled.</p>
+          <p className="mt-1 text-xs text-muted">Controls how often each module is polled.</p>
         </div>
 
         <div className="flex flex-col gap-5 px-5 py-5">
           <div className="flex max-w-[560px] flex-col gap-2">
             <label className="field-label" htmlFor="refresh-interval">
-              Refresh interval
+              Kubernetes refresh interval
             </label>
 
             <div className="flex flex-wrap items-center gap-3">
@@ -228,6 +247,50 @@ export function SettingsPage({ settings, onSaved, toast }: SettingsPageProps) {
               Whole seconds, 1–3600. Currently refreshing every{' '}
               {settings.refreshIntervalSeconds} seconds. Lower values increase load on the
               Kubernetes API servers.
+            </p>
+          </div>
+
+          <div className="flex max-w-[560px] flex-col gap-2 border-t border-line pt-5">
+            <label className="field-label" htmlFor="ecs-refresh-interval">
+              Alibaba Cloud refresh interval
+            </label>
+
+            <div className="flex flex-wrap items-center gap-3">
+              <div className="relative w-40">
+                <input
+                  id="ecs-refresh-interval"
+                  data-testid="ecs-refresh-interval"
+                  className="text-input pr-16 font-mono"
+                  type="number"
+                  min={10}
+                  max={3600}
+                  step={1}
+                  value={ecsValue}
+                  onChange={(event) => setEcsValue(event.target.value)}
+                />
+                <span className="pointer-events-none absolute top-1/2 right-3 -translate-y-1/2 text-[11px] text-dim">
+                  seconds
+                </span>
+              </div>
+            </div>
+
+            <div className="flex flex-wrap gap-2 pt-1">
+              {ECS_PRESETS.map((preset) => (
+                <button
+                  key={preset}
+                  type="button"
+                  className={`filter-chip ${Number(ecsValue) === preset ? 'active' : ''}`}
+                  onClick={() => setEcsValue(String(preset))}
+                >
+                  {preset}s
+                </button>
+              ))}
+            </div>
+
+            <p className="m-0 text-[10.5px] leading-[1.45] text-dim">
+              Whole seconds, 10–3600. Currently refreshing every{' '}
+              {settings.ecsRefreshIntervalSeconds} seconds. The Alibaba Cloud OpenAPI is rate
+              limited, so this module polls more slowly than Kubernetes.
             </p>
 
             {error && (

@@ -59,6 +59,84 @@ export interface PodsResult {
   latencyMs: number
 }
 
+/* ------------------------------------------------------------------ *
+ * Alibaba Cloud ECS
+ *
+ * Mirrors the Kubernetes connection/pod split: a profile stores the
+ * credentials for one Alibaba Cloud account + region, and the instance
+ * list is what the dashboard renders.
+ * ------------------------------------------------------------------ */
+
+/** An Alibaba Cloud connection profile as exposed to the renderer. The AccessKey secret is never sent across IPC. */
+export interface EcsProfileRecord {
+  id: number
+  name: string
+  regionId: string
+  accessKeyId: string
+  /** Optional endpoint override, e.g. an internal VPC endpoint. */
+  endpoint: string | null
+  hasSecret: boolean
+  createdAt: string
+  updatedAt: string
+}
+
+export interface EcsProfileInput {
+  name: string
+  regionId: string
+  accessKeyId: string
+  /** Empty / omitted means "keep the stored secret" when updating an existing profile. */
+  accessKeySecret?: string | null
+  endpoint?: string | null
+}
+
+/** Result of probing an ECS profile with its credentials. */
+export interface EcsConnectionTestResult {
+  ok: boolean
+  /** The region the credentials resolved against, when the call succeeded. */
+  regionId?: string
+  /** Number of instances visible with these credentials. */
+  instanceCount?: number
+  latencyMs?: number
+  error?: string
+}
+
+/** A single ECS instance as shown in the instance table. */
+export interface EcsInstanceInfo {
+  instanceId: string
+  /** Tagged name, falling back to the instance id. */
+  name: string
+  /** Running, Stopped, Starting, ... */
+  status: string
+  instanceType: string
+  /** vCPU count. */
+  cpu: number
+  /** Memory in MiB. */
+  memoryMiB: number
+  osName: string
+  regionId: string
+  zoneId: string
+  privateIp: string
+  publicIp: string
+  /** PrePaid or PostPaid. */
+  chargeType: string
+  hostName: string
+  vpcId: string
+  createdAt: string
+  /** Expiry timestamp for subscription instances, empty otherwise. */
+  expiredAt: string
+}
+
+export interface EcsInstancesResult {
+  profileId: number
+  instances: EcsInstanceInfo[]
+  /** Timestamp of this fetch attempt. */
+  fetchedAt: string
+  /** Total instances in the region, which can exceed the number returned when paging is capped. */
+  totalCount: number
+  error: string | null
+  latencyMs: number
+}
+
 export interface AppInfo {
   version: string
   platform: string
@@ -67,6 +145,11 @@ export interface AppInfo {
 export interface AppSettings {
   /** Dashboard polling interval, in seconds. */
   refreshIntervalSeconds: number
+  /**
+   * Alibaba Cloud polling interval, in seconds. The OpenAPI is rate limited,
+   * so this is deliberately slower than the in-cluster interval.
+   */
+  ecsRefreshIntervalSeconds: number
 }
 
 export type UpdatePhase =

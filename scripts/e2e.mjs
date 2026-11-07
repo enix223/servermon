@@ -14,7 +14,11 @@ mkdirSync(screenshotsDir, { recursive: true })
 const userDataDir = mkdtempSync(join(tmpdir(), 'servermon-e2e-'))
 
 let mockServer = null
+let mockEcsServer = null
 let electronApp = null
+
+const MOCK_ACCESS_KEY_ID = 'test-access-key-id'
+const MOCK_ACCESS_KEY_SECRET = 'test-access-key-secret'
 
 function startMockServer() {
   return new Promise((resolve, reject) => {
@@ -43,6 +47,33 @@ function startMockServer() {
   })
 }
 
+function startMockEcsServer() {
+  return new Promise((resolve, reject) => {
+    const child = spawn(process.execPath, ['scripts/mock-aliyun-ecs-server.mjs'], {
+      cwd,
+      stdio: ['ignore', 'pipe', 'inherit']
+    })
+    let buffer = ''
+    const timer = setTimeout(() => {
+      child.kill('SIGTERM')
+      reject(new Error('Mock Alibaba Cloud ECS API server did not start in time.'))
+    }, 10_000)
+    child.stdout.setEncoding('utf8')
+    child.stdout.on('data', (chunk) => {
+      buffer += chunk
+      const match = buffer.match(/http:\/\/127\.0\.0\.1:(\d+)/)
+      if (match) {
+        clearTimeout(timer)
+        resolve({ child, port: Number(match[1]) })
+      }
+    })
+    child.on('exit', (code) => {
+      clearTimeout(timer)
+      reject(new Error(`Mock ECS server exited early with code ${code}.`))
+    })
+  })
+}
+
 async function waitForRowCount(page, expected, timeoutMs = 20_000) {
   const started = Date.now()
   let last = -1
@@ -59,6 +90,11 @@ async function main() {
   mockServer = started.child
   const baseUrl = `http://127.0.0.1:${started.port}`
   console.log(`▸ mock k8s API: ${baseUrl}`)
+
+  const startedEcs = await startMockEcsServer()
+  mockEcsServer = startedEcs.child
+  const baseUrlEcs = `http://127.0.0.1:${startedEcs.port}`
+  console.log(`▸ mock Alibaba Cloud ECS API: ${baseUrlEcs}`)
 
   const kubeconfigPath = join(userDataDir, 'mock-kubeconfig.yaml')
   writeFileSync(
@@ -87,7 +123,7 @@ async function main() {
 
   electronApp = await electron.launch({
     executablePath: electronPath,
-    args: ['.'],
+    args: ['.', '--no-sandbox', '--disable-gpu', '--disable-dev-shm-usage'],
     env: { ...process.env, SERVERMON_USER_DATA: userDataDir },
     timeout: 60_000
   })
@@ -209,12 +245,95 @@ async function main() {
   await delay(250)
   console.log('✓ responsive sidebar')
 
-  // Multi-module navigation: Alibaba Cloud placeholder and back.
+  // Multi-module navigation: the Alibaba Cloud module and back.
+  await page.getByTestId('nav-aliyun-profiles').click()
+  await page.getByRole('heading', { name: 'Alibaba Cloud profiles', exact: true }).waitFor()
+  await page.getByTestId('add-ecs-profile').click()
+  await page.getByTestId('ecs-profile-name').fill('mock-aliyun')
+  await page.getByTestId('ecs-profile-region').fill('cn-hangzhou')
+  await page.getByTestId('ecs-profile-access-key-id').fill(MOCK_ACCESS_KEY_ID)
+  await page.getByTestId('ecs-profile-access-key-secret').fill(MOCK_ACCESS_KEY_SECRET)
+  await page.getByTestId('ecs-profile-endpoint').fill(baseUrlEcs)
+
+  await page.getByTestId('test-ecs-profile').click()
+  await page.getByText(/Connected · cn-hangzhou/).waitFor({ timeout: 15_000 })
+  await page.screenshot({ path: join(screenshotsDir, '09-add-ecs-profile.png') })
+
+  await page.getByTestId('save-ecs-profile').click()
+  await page.locator('.config-name', { hasText: 'mock-aliyun' }).waitFor({ timeout: 10_000 })
+  console.log('✓ ECS profile created via config page')
+
+  // The ECS servers page lists the instances of the selected profile.
   await page.getByTestId('nav-aliyun-ecs').click()
-  await page
-    .getByRole('heading', { name: 'Alibaba Cloud monitoring is not wired up yet' })
+  await page.getByTestId('ecs-instance-row').first().waitFor({ timeout: 15_000 })
+  const instanceRows = page.locator('[data-testid="ecs-instance-row"]')
+  assert.equal(await instanceRows.count(), 6)
+  for (const name of [
+    'web-frontend-01',
+    'web-frontend-02',
+    'api-gateway-01',
+    'batch-worker-01',
+    'legacy-db-01',
+    'windows-build-01'
+  ]) {
+    await instanceRows.filter({ hasText: name }).waitFor()
+  }
+  // Status pills are scoped to the row: the status filter dropdown also holds
+  // the same words in <option> elements, which are not visible.
+  await instanceRows.filter({ hasText: 'legacy-db-01' }).getByText('Starting').waitFor()
+  await instanceRows.filter({ hasText: 'batch-worker-01' }).getByText('Stopped').waitFor()
+  await instanceRows.filter({ hasText: 'api-gateway-01' }).getByText('Running').waitFor()
+  await instanceRows
+    .filter({ hasText: 'api-gateway-01' })
+    .getByText('ecs.c7.xlarge')
     .waitFor()
-  await page.screenshot({ path: join(screenshotsDir, '06-aliyun-placeholder.png') })
+  await instanceRows.filter({ hasText: 'windows-build-01' }).getByText('Windows Server 2022').waitFor()
+  console.log('✓ ECS instance rows render API data')
+  await page.screenshot({ path: join(screenshotsDir, '10-aliyun-ecs.png') })
+  console.log('✓ ECS instance table renders instances from the OpenAPI')
+
+  // Search and issue filters behave like the Kubernetes module.
+  await page.getByTestId('ecs-search').fill('api-gateway')
+  await page.waitForFunction(
+    () => document.querySelectorAll('[data-testid="ecs-instance-row"]').length === 1
+  )
+  await page.getByTestId('ecs-search').fill('')
+  await page.waitForFunction(
+    () => document.querySelectorAll('[data-testid="ecs-instance-row"]').length === 6
+  )
+  console.log('✓ ECS filters work')
+
+  // A second profile shows up as its own tab.
+  await page.getByTestId('nav-aliyun-profiles').click()
+  await page.getByTestId('add-ecs-profile').click()
+  await page.getByTestId('ecs-profile-name').fill('mock-aliyun-secondary')
+  await page.getByTestId('ecs-profile-region').fill('cn-hangzhou')
+  await page.getByTestId('ecs-profile-access-key-id').fill(MOCK_ACCESS_KEY_ID)
+  await page.getByTestId('ecs-profile-access-key-secret').fill(MOCK_ACCESS_KEY_SECRET)
+  await page.getByTestId('ecs-profile-endpoint').fill(baseUrlEcs)
+  await page.getByTestId('save-ecs-profile').click()
+  await page.locator('.config-name', { hasText: 'mock-aliyun-secondary' }).waitFor({
+    timeout: 10_000
+  })
+
+  await page.getByTestId('nav-aliyun-ecs').click()
+  assert.equal(await page.getByTestId('ecs-profile-tab').count(), 2)
+  await page.getByTestId('ecs-profile-tab').filter({ hasText: 'mock-aliyun-secondary' }).click()
+  await page
+    .locator('.overview-title-row h1', { hasText: 'mock-aliyun-secondary' })
+    .waitFor()
+  await page.getByTestId('ecs-instance-row').first().waitFor({ timeout: 15_000 })
+  await page.screenshot({ path: join(screenshotsDir, '11-aliyun-ecs-multi.png') })
+  console.log('✓ multiple ECS profile tabs')
+
+  // The mock server validates the OpenAPI signature, so a successful poll
+  // proves the request was signed correctly.
+  const ecsStats = await fetch(`${baseUrlEcs}/stats`).then((response) => response.json())
+  assert.ok(ecsStats.describeRequests > 0, 'Expected DescribeInstances requests.')
+  assert.equal(ecsStats.badSignature, 0, 'Expected no signature mismatches.')
+  assert.equal(ecsStats.unauthorized, 0, 'Expected no unauthorized requests.')
+  console.log(`✓ OpenAPI requests signed correctly (${ecsStats.describeRequests} requests)`)
+
   await page.getByTestId('nav-k8s-pods').click()
   await page.locator('.overview-title-row h1', { hasText: 'mock-kubeconfig' }).waitFor()
   console.log('✓ module navigation')
@@ -243,12 +362,15 @@ async function main() {
   await page.getByTestId('update-status').waitFor({ timeout: 10_000 })
   assert.equal(await page.getByTestId('refresh-interval').inputValue(), '5')
   assert.equal(await page.getByTestId('check-updates').isDisabled(), true)
-  assert.match(await page.getByTestId('update-status').innerText(), /packaged builds/)
+  // Chromium can expose partially painted text, so wait for the full message.
+  await page.getByText(/Update checks run in packaged builds/).first().waitFor({
+    timeout: 10_000
+  })
   await page.screenshot({ path: join(screenshotsDir, '08-settings.png') })
 
   await page.getByTestId('refresh-interval').fill('2')
   await page.getByTestId('save-settings').click()
-  await page.getByText('Refresh interval set to 2s.').waitFor()
+  await page.getByText(/Refresh interval set to 2s/).waitFor()
   await page.locator('.live-pill').filter({ hasText: 'Live · 2s' }).waitFor()
   console.log('✓ settings refresh interval updated')
 
@@ -260,14 +382,19 @@ async function main() {
   const setting = db
     .prepare("SELECT value FROM settings WHERE key = 'refresh_interval_seconds'")
     .get()
+  const profileCount = db.prepare('SELECT COUNT(*) AS count FROM ecs_profiles').get()
   db.close()
   assert.deepEqual(
     migrations.map((migration) => Number(migration.version)),
-    [1, 2]
+    [1, 2, 3, 4]
   )
   assert.equal(migrations[0].name, 'create_clusters')
   assert.equal(migrations[1].name, 'create_settings')
+  assert.equal(migrations[2].name, 'create_ecs_profiles')
+  assert.equal(migrations[3].name, 'seed_ecs_refresh_interval')
   assert.equal(setting.value, '2')
+
+  assert.equal(Number(profileCount.count), 2)
   console.log('✓ schema migrations and settings persisted')
 
   console.log('\nE2E passed. Screenshots in ./screenshots')
@@ -289,5 +416,6 @@ try {
 } finally {
   if (electronApp) await electronApp.close().catch(() => undefined)
   if (mockServer) mockServer.kill('SIGTERM')
+  if (mockEcsServer) mockEcsServer.kill('SIGTERM')
   rmSync(userDataDir, { recursive: true, force: true })
 }

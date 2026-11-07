@@ -2,7 +2,7 @@
   "name": "servermon",
   "productName": "ServerMon",
   "version": "0.1.0",
-  "description": "Real-time multi-cluster Kubernetes pod monitor",
+  "description": "Real-time multi-cluster Kubernetes pod and Alibaba Cloud ECS monitor",
   "type": "module",
   "main": "./out/main/index.js",
   "private": true,
@@ -14,6 +14,8 @@
     "typecheck": "tsc --noEmit -p tsconfig.node.json && tsc --noEmit -p tsconfig.web.json",
     "dist": "electron-vite build && electron-builder --mac",
     "mock:cluster": "node scripts/mock-k8s-server.mjs",
+    "mock:aliyun": "node scripts/mock-aliyun-ecs-server.mjs",
+    "verify:signature": "node --experimental-strip-types scripts/verify-aliyun-signature.ts",
     "test:e2e": "electron-vite build && node scripts/e2e.mjs",
     "demo:images": "electron-vite build && node scripts/capture-demo.mjs"
   },

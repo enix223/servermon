@@ -3,11 +3,15 @@ import type { DatabaseSync } from 'node:sqlite'
 import { join } from 'node:path'
 import { ClusterService } from './application/clusterService'
 import { ConnectionTester } from './application/connectionTester'
+import { EcsConnectionTester } from './application/ecsConnectionTester'
+import { EcsProfileService } from './application/ecsProfileService'
 import { SettingsService } from './application/settingsService'
 import { openSqliteDatabase } from './infrastructure/sqliteDatabase'
 import { SqliteClusterRepository } from './infrastructure/sqliteClusterRepository'
+import { SqliteEcsProfileRepository } from './infrastructure/sqliteEcsProfileRepository'
 import { SqliteSettingsRepository } from './infrastructure/sqliteSettingsRepository'
 import { KubernetesClusterMonitor } from './infrastructure/kubernetesClusterMonitor'
+import { AliyunEcsMonitor } from './infrastructure/aliyunEcsMonitor'
 import { ElectronUpdater } from './infrastructure/electronUpdater'
 import { registerIpcHandlers } from './ipc'
 
@@ -68,15 +72,20 @@ function createWindow(): void {
 app.whenReady().then(() => {
   database = openSqliteDatabase(app.getPath('userData'))
   const clusterRepository = new SqliteClusterRepository(database)
+  const ecsProfileRepository = new SqliteEcsProfileRepository(database)
   const settingsRepository = new SqliteSettingsRepository(database)
   const monitor = new KubernetesClusterMonitor()
+  const ecsMonitor = new AliyunEcsMonitor()
   const updater = new ElectronUpdater()
 
   registerIpcHandlers({
     clusterService: new ClusterService(clusterRepository),
     connectionTester: new ConnectionTester(clusterRepository, monitor),
+    ecsProfileService: new EcsProfileService(ecsProfileRepository),
+    ecsConnectionTester: new EcsConnectionTester(ecsProfileRepository, ecsMonitor),
     settingsService: new SettingsService(settingsRepository),
     monitor,
+    ecsMonitor,
     updater
   })
 

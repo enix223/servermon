@@ -175,6 +175,25 @@ export function CloudIcon({ size = 16, className }: IconProps) {
   )
 }
 
+export function KeyIcon({ size = 16, className }: IconProps) {
+  return (
+    <svg {...base(size, className)}>
+      <circle cx="7.5" cy="15.5" r="3.5" />
+      <path d="m10 13 8.5-8.5M16 6l2.5 2.5M14 8l2.5 2.5" />
+    </svg>
+  )
+}
+
+export function ServerIcon({ size = 16, className }: IconProps) {
+  return (
+    <svg {...base(size, className)}>
+      <rect x="3" y="4" width="18" height="7" rx="1.5" />
+      <rect x="3" y="13" width="18" height="7" rx="1.5" />
+      <path d="M7 7.5h.01M7 16.5h.01" />
+    </svg>
+  )
+}
+
 export function GearIcon({ size = 16, className }: IconProps) {
   return (
     <svg {...base(size, className)}>

@@ -60,6 +60,32 @@ const MIGRATIONS: Migration[] = [
         INSERT OR IGNORE INTO settings (key, value, updated_at)
         VALUES ('refresh_interval_seconds', '5', strftime('%Y-%m-%dT%H:%M:%fZ', 'now'));
       `)
+  },
+  {
+    version: 3,
+    name: 'create_ecs_profiles',
+    up: (db) =>
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS ecs_profiles (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          name TEXT NOT NULL COLLATE NOCASE UNIQUE,
+          region_id TEXT NOT NULL,
+          access_key_id TEXT NOT NULL,
+          access_key_secret TEXT,
+          endpoint TEXT,
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL
+        );
+      `)
+  },
+  {
+    version: 4,
+    name: 'seed_ecs_refresh_interval',
+    up: (db) =>
+      db.exec(`
+        INSERT OR IGNORE INTO settings (key, value, updated_at)
+        VALUES ('ecs_refresh_interval_seconds', '60', strftime('%Y-%m-%dT%H:%M:%fZ', 'now'));
+      `)
   }
 ]
 

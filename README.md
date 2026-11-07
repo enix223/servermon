@@ -1,13 +1,13 @@
 # ServerMon
 
-A desktop monitoring console for multiple Kubernetes clusters, built with Electron, React,
-Tailwind CSS, and SQLite. Each cluster is polled at a configurable interval (5 seconds by
-default) and gets its own tab; connections are managed from a built-in **Clusters** page.
+A desktop monitoring console for multiple Kubernetes clusters **and Alibaba Cloud ECS
+accounts**, built with Electron, React, Tailwind CSS, and SQLite. Each connection is polled at a
+configurable interval and gets its own tab; connections are managed from a built-in page.
 
 The app is structured as a multi-module console:
 
 - **Kubernetes** → Pods, Clusters
-- **Alibaba Cloud** → ECS servers (layout placeholder; integration is planned)
+- **Alibaba Cloud** → ECS servers, Profiles
 
 <p align="center">
   <img src="docs/images/dashboard.png" alt="ServerMon dashboard showing pod status across three Kubernetes clusters" width="100%">
@@ -34,6 +34,11 @@ The app is structured as a multi-module console:
   used.
 - **Web-ready boundaries** — pages depend on an injected data API interface; SQLite lives behind a
   repository port. Both can be swapped without touching the UI or the use-case layer.
+- **Alibaba Cloud ECS via OpenAPI** — list ECS instances through the Alibaba Cloud RPC API
+  (`DescribeInstances`) using request signing (Signature Version 1.0) implemented in-process, so no
+  heavyweight SDK is required.
+- **Multiple Alibaba Cloud profiles** — one profile per account and region. A tab per profile shows
+  its instances; profiles are added, edited, tested, and removed from the **Profiles** page.
 - **In-app upgrades** — Settings → Application updates checks for a newer version, shows release
   notes and download progress, and can restart/install the update.
 - **Persisted preferences** — the refresh interval is stored in the SQLite `settings` table.
@@ -63,6 +68,21 @@ Screenshots were captured against three demo clusters reporting Kubernetes 1.29.
   <br>
   <sub><b>Settings</b> — global refresh interval persisted to SQLite, plus application updates</sub>
 </p>
+
+<table>
+  <tr>
+    <td width="50%">
+      <img src="docs/images/aliyun-ecs.png" alt="Alibaba Cloud ECS servers page listing instances for a profile" width="100%">
+      <br>
+      <sub><b>ECS servers</b> — instances of the selected Alibaba Cloud profile with status, type, vCPU, memory, OS and IPs</sub>
+    </td>
+    <td width="50%">
+      <img src="docs/images/add-ecs-profile.png" alt="Add Alibaba Cloud profile dialog" width="100%">
+      <br>
+      <sub><b>Add a profile</b> — AccessKey pair, region, and an optional endpoint override</sub>
+    </td>
+  </tr>
+</table>
 
 <details>
 <summary><b>Responsive layout</b> (click to expand)</summary>
@@ -101,6 +121,27 @@ subjects:
     namespace: default
 ```
 
+## Alibaba Cloud ECS requirements
+
+Create a RAM user with a minimal read-only policy, then add a profile in **Alibaba Cloud →
+Profiles** with its AccessKey pair and a region:
+
+```json
+{
+  "Version": "1",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Action": "ecs:DescribeInstances",
+      "Resource": "*"
+    }
+  ]
+}
+```
+
+The AccessKey secret is stored locally in SQLite and never sent to the renderer. ServerMon only
+reads instance inventory — it never starts, stops, or modifies an instance.
+
 ## Development
 
 ```bash
@@ -110,6 +151,13 @@ npm run typecheck  # main/preload and renderer TypeScript checks
 npm run build      # production build into out/
 npm start          # run the production build
 npm run demo:images # regenerate the README screenshots (mock Kubernetes clusters)
+```
+
+Local helpers for the Alibaba Cloud module:
+
+```bash
+npm run mock:aliyun      # mock ECS OpenAPI server (validates the request signature)
+npm run verify:signature  # check the RPC signing against Alibaba Cloud's documented example
 ```
 
 If the Electron binary was not downloaded by `npm install` (npm 11 can skip install scripts):
@@ -141,6 +189,16 @@ npm run dist       # electron-builder -> dist/
    narrow the pod table.
 5. Editing or removing a connection only changes ServerMon's local configuration; the cluster is
    never modified.
+
+To monitor Alibaba Cloud:
+
+1. Open **Alibaba Cloud → Profiles → Add profile**.
+2. Enter a profile name, a region (e.g. `cn-hangzhou`), an AccessKey ID, and the AccessKey secret.
+   The endpoint override is optional — it defaults to `https://ecs.{region}.aliyuncs.com`.
+3. **Test connection** signs a `DescribeInstances` request and reports the number of visible
+   instances, then save.
+4. Switch to **Alibaba Cloud → ECS servers**. Every profile gets a tab; the active tab lists the
+   instances of that profile with status, instance type, vCPU, memory, OS, zone, and IP addresses.
 
 ## UI layering and the data API
 
@@ -176,6 +234,12 @@ Suggested REST mapping for the future web app:
 | `deleteCluster(id)` | `DELETE /api/clusters/:id` |
 | `testCluster(input, id?)` | `POST /api/clusters/test` |
 | `listPods(clusterId)` | `GET /api/clusters/:id/pods` |
+| `listEcsProfiles()` | `GET /api/ecs/profiles` |
+| `createEcsProfile(input)` | `POST /api/ecs/profiles` |
+| `updateEcsProfile(id, input)` | `PUT /api/ecs/profiles/:id` |
+| `deleteEcsProfile(id)` | `DELETE /api/ecs/profiles/:id` |
+| `testEcsProfile(input, id?)` | `POST /api/ecs/profiles/test` |
+| `listEcsInstances(profileId)` | `GET /api/ecs/profiles/:id/instances` |
 | `getSettings()` | `GET /api/settings` |
 | `updateSettings(settings)` | `PUT /api/settings` |
 | `getUpdateState()` | `GET /api/updates` |
@@ -184,10 +248,17 @@ Suggested REST mapping for the future web app:
 
 ## Settings
 
-**Settings → Monitoring** sets the global refresh interval (1–3600 seconds). The value is stored in
-the SQLite `settings` table (key `refresh_interval_seconds`, default `5`) and is read through
-`SettingsService` → `SettingsRepository` → `SqliteSettingsRepository`. Changing it updates polling
-immediately and updates the `Live · Ns` indicator in the title bar.
+**Settings → Monitoring** sets two intervals:
+
+- **Kubernetes refresh interval** (1–3600 seconds, key `refresh_interval_seconds`, default `5`) —
+  how often every cluster is polled.
+- **Alibaba Cloud refresh interval** (10–3600 seconds, key `ecs_refresh_interval_seconds`, default
+  `60`) — how often every ECS profile is polled. It is slower by default because the Alibaba Cloud
+  OpenAPI is rate limited.
+
+Both values are stored in the SQLite `settings` table and are read through `SettingsService` →
+`SettingsRepository` → `SqliteSettingsRepository`. Changing them updates polling immediately and
+updates the `Live · Ns` indicator in the title bar.
 
 ## Application updates
 
@@ -217,13 +288,18 @@ with deployment-version information.
 src/main/
   domain/            Pure domain types, validation, draft merging, errors
   application/
-    ports.ts         ClusterRepository + ClusterMonitor interfaces (the ports)
-    clusterService.ts     CRUD use cases
-    connectionTester.ts   "Test connection" use case
+    ports.ts         ClusterRepository + ClusterMonitor + EcsProfileRepository + EcsMonitor (the ports)
+    clusterService.ts      CRUD use cases
+    connectionTester.ts    "Test connection" use case
+    ecsProfileService.ts   ECS profile CRUD use cases
+    ecsConnectionTester.ts ECS "Test connection" use case
   infrastructure/
     sqliteDatabase.ts            open DB + run migrations
     sqliteClusterRepository.ts   ClusterRepository → SQLite
+    sqliteEcsProfileRepository.ts EcsProfileRepository → SQLite
     kubernetesClusterMonitor.ts  ClusterMonitor → Kubernetes API
+    aliyunOpenApiClient.ts       Alibaba Cloud RPC signing + transport
+    aliyunEcsMonitor.ts          EcsMonitor → Alibaba Cloud OpenAPI
   ipc.ts             Transport adapter: IPC → application services
   index.ts           Composition root (the only place that wires concrete classes)
 ```
@@ -273,7 +349,7 @@ Startup runs forward-only migrations from `src/main/infrastructure/sqliteDatabas
 }
 ```
 
-This is how table changes or new tables (for example the planned Aliyun module) are introduced
+This is how table changes or new tables (for example the Alibaba Cloud ECS module) are introduced
 without breaking existing installs. The current `clusters` table:
 
 ```sql
@@ -291,6 +367,17 @@ CREATE TABLE clusters (
   updated_at         TEXT NOT NULL
 );
 
+CREATE TABLE ecs_profiles (
+  id                INTEGER PRIMARY KEY AUTOINCREMENT,
+  name              TEXT NOT NULL COLLATE NOCASE UNIQUE,
+  region_id         TEXT NOT NULL,
+  access_key_id     TEXT NOT NULL,
+  access_key_secret TEXT,
+  endpoint          TEXT,
+  created_at        TEXT NOT NULL,
+  updated_at        TEXT NOT NULL
+);
+
 CREATE TABLE settings (
   key        TEXT PRIMARY KEY,
   value      TEXT NOT NULL,
@@ -304,9 +391,11 @@ CREATE TABLE schema_migrations (
 );
 ```
 
-Migrations shipped so far: `1` (clusters), `2` (settings, seeded with a 5-second refresh interval).
+Migrations shipped so far: `1` (clusters), `2` (settings, seeded with a 5-second refresh
+interval), `3` (ecs_profiles), `4` (settings, seeded with a 60-second Alibaba Cloud refresh
+interval).
 
-Bearer tokens are stored locally in SQLite. The file is restricted to the current user
+Bearer tokens and AccessKey secrets are stored locally in SQLite. The file is restricted to the current user
 (`chmod 600`) and tokens are never sent to the renderer, but the database is not encrypted. Treat
 the app-data directory as sensitive. A web deployment should use a server-side secret store instead
 of storing cloud credentials in the browser database.
@@ -339,11 +428,18 @@ isolated user-data directory, and verifies:
 - pod status rendering, search, issue/completed filters,
 - the configured auto-refresh (5 s default, by counting requests received by the mock API),
 - responsive sidebar collapse,
-- module navigation to the Alibaba Cloud placeholder page,
+- module navigation between the Kubernetes and Alibaba Cloud modules,
 - editing and deleting clusters,
 - the settings table (refresh interval persisted and reflected in the UI),
 - the update-status UI (the update path reports as unavailable in unpackaged test builds),
+- adding an Alibaba Cloud profile, testing it against a mock OpenAPI server, and rendering the
+  returned ECS instances (status, type, vCPU, memory, OS, IPs),
+- the ECS search filter and multiple profile tabs,
+- that the mock OpenAPI server accepted every request signature (no `SignatureDoesNotMatch`),
 - the `schema_migrations` history rows.
+
+The mock Alibaba Cloud server verifies the request signature independently of the app, so a signing
+bug is caught by the suite.
 
 Screenshots are written to `screenshots/`.
 
@@ -352,24 +448,28 @@ Screenshots are written to `screenshots/`.
 ```
 src/
   main/
-    domain/cluster.ts
-    application/{ports,clusterService,connectionTester,settingsService}.ts
-    infrastructure/{sqliteDatabase,sqliteClusterRepository,sqliteSettingsRepository}.ts
-    infrastructure/{kubernetesClusterMonitor,electronUpdater}.ts
+    domain/{cluster,ecsProfile}.ts
+    application/{ports,clusterService,connectionTester,ecsProfileService,ecsConnectionTester,settingsService}.ts
+    infrastructure/{sqliteDatabase,sqliteClusterRepository,sqliteEcsProfileRepository,sqliteSettingsRepository}.ts
+    infrastructure/{kubernetesClusterMonitor,aliyunOpenApiClient,aliyunEcsMonitor,electronUpdater}.ts
     ipc.ts
     index.ts
   preload/index.ts
   renderer/
     src/App.tsx
     src/data/{ApiContext,electronApi}.tsx|ts
-    src/components/{Sidebar,TopBar,ClusterTabs,PodsView,PodTable,ConfigPage,ClusterForm,SettingsPage,AliyunEcsPage,…}
-    src/lib/{navigation,format,pods,ui}.ts
+    src/components/{Sidebar,TopBar,ClusterTabs,PodsView,PodTable,ConfigPage,ClusterForm,…}
+    src/components/{EcsProfileTabs,EcsInstancesView,EcsInstanceTable,EcsProfilesPage,EcsProfileForm,SettingsPage,…}
+    src/lib/{navigation,format,pods,ecs,ui,useEcsMonitor}.ts
     src/styles.css
   shared/
     api.ts          ServermonApi contract used by pages
     types.ts        Domain DTOs shared across processes
 scripts/
   mock-k8s-server.mjs
+  mock-aliyun-ecs-server.mjs
+  verify-aliyun-signature.ts
+  check-integrity.mjs
   e2e.mjs
   capture-demo.mjs
 docs/images/        README screenshots
@@ -383,7 +483,11 @@ docs/images/        README screenshots
 - Only bearer-token and kubeconfig authentication are supported; client-certificate auth works via
   kubeconfig.
 - Pod CPU/memory usage is not shown because it requires metrics-server and the metrics API.
-- The Alibaba Cloud ECS page is a layout placeholder only. It uses no credits, credentials, or
-  Alibaba Cloud API calls yet.
+- The Alibaba Cloud module polls the ECS instance inventory only. CloudMonitor metrics (CPU/memory
+  graphs), disks, and networks are not shown.
+- The Alibaba Cloud module polls on its own, slower interval and only while the module is on screen,
+  so it does not spend API quota in the background.
+- ECS instance status is reported as the Alibaba Cloud API returns it (`Running`, `Stopped`,
+  `Starting`, …); it is not normalized to Kubernetes-style pod statuses.
 - The status column derives from pod phase plus container waiting/terminated reasons; it aims to
   match `kubectl get pods`, not every pod condition.
