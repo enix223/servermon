@@ -1,0 +1,215 @@
+name: Release
+
+# Builds installers for macOS, Windows and Linux and attaches them to the
+# GitHub release that triggered the run.
+#
+# Triggered by publishing a release in the GitHub UI (or by tagging and
+# publishing one with `gh release create`). Can also be run manually against an
+# existing tag from the Actions tab.
+#
+# Assets per platform:
+#   macOS   ServerMon-<version>-arm64.* and -x64.* (dmg + zip), blockmaps,
+#           latest-mac.yml
+#   Windows ServerMon-<version>-x64.exe (NSIS), blockmap, latest.yml
+#   Linux   ServerMon-<version>-x64.AppImage, blockmap, latest-linux.yml
+#
+# electron-updater reads latest-*.yml from the release assets, so those files
+# must be uploaded together with the installers.
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing release tag to build and attach artifacts to (e.g. v0.1.0)
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+# One build per release tag: parallel runs would race while uploading with
+# --clobber.
+concurrency:
+  group: release-${{ github.event.release.tag_name || inputs.tag }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Build ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: macOS (x64 + arm64)
+            os: macos-latest
+            platform: mac
+            build_args: --mac --x64 --arm64
+            assets: "*.dmg,*.dmg.blockmap,*.zip,*.zip.blockmap,latest-mac.yml"
+          - name: Windows (x64)
+            os: windows-latest
+            platform: win
+            build_args: --win --x64
+            assets: "*.exe,*.exe.blockmap,latest.yml"
+          - name: Linux (x64)
+            os: ubuntu-latest
+            platform: linux
+            build_args: --linux --x64
+            assets: "*.AppImage,*.AppImage.blockmap,latest-linux.yml"
+
+    env:
+      # Used by `gh release upload` and when electron-builder resolves the
+      # GitHub publish provider that ends up in app-update.yml.
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      TAG: ${{ github.event.release.tag_name || inputs.tag }}
+
+    steps:
+      - name: Check out the release tag
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.release.tag_name || inputs.tag }}
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Cache Electron and electron-builder downloads
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/electron
+            ~/.cache/electron-builder
+            ~/Library/Caches/electron
+            ~/Library/Caches/electron-builder
+            ~/AppData/Local/electron/Cache
+            ~/AppData/Local/electron-builder/Cache
+          key: ${{ runner.os }}-electron-${{ hashFiles('package-lock.json') }}
+          restore-keys: |
+            ${{ runner.os }}-electron-
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      # The tag is the source of truth for the release version, so the
+      # artifacts do not depend on package.json being bumped beforehand.
+      - name: Align package version with the release tag
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="${TAG#v}"
+          if [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+([-+][0-9A-Za-z.-]+)?$ ]]; then
+            node -e '
+              const fs = require("node:fs")
+              const pkg = JSON.parse(fs.readFileSync("package.json", "utf8"))
+              pkg.version = process.argv[1]
+              fs.writeFileSync("package.json", JSON.stringify(pkg, null, 2) + "\n")
+            ' "$version"
+            echo "Building version $version (from tag $TAG)"
+          else
+            echo "Tag '$TAG' is not a semver version; using the package.json version"
+          fi
+          node -p "'effective version: ' + require('./package.json').version"
+
+      # Signing and notarization are opt-in: they activate only when the
+      # matching repository secrets exist. Without them the build is unsigned
+      # but still succeeds.
+      - name: Detect signing secrets
+        id: signing
+        shell: bash
+        env:
+          MAC_CERTIFICATE: ${{ secrets.MAC_CERTIFICATE }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          WIN_CERTIFICATE: ${{ secrets.WIN_CERTIFICATE }}
+        run: |
+          set -euo pipefail
+          if [ -n "${MAC_CERTIFICATE:-}" ] && [ -n "${APPLE_ID:-}" ]; then
+            echo "mac=true" >> "$GITHUB_OUTPUT"
+          fi
+          if [ -n "${WIN_CERTIFICATE:-}" ]; then
+            echo "win=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Install macOS signing certificate
+        if: matrix.platform == 'mac' && steps.signing.outputs.mac == 'true'
+        shell: bash
+        env:
+          MAC_CERTIFICATE: ${{ secrets.MAC_CERTIFICATE }}
+          MAC_CERTIFICATE_PASSWORD: ${{ secrets.MAC_CERTIFICATE_PASSWORD }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          set -euo pipefail
+          cert="$RUNNER_TEMP/signing-cert.p12"
+          printf '%s' "$MAC_CERTIFICATE" | base64 --decode > "$cert"
+          {
+            echo "CSC_LINK=$cert"
+            echo "CSC_KEY_PASSWORD=$MAC_CERTIFICATE_PASSWORD"
+            echo "APPLE_ID=$APPLE_ID"
+            echo "APPLE_APP_SPECIFIC_PASSWORD=$APPLE_APP_SPECIFIC_PASSWORD"
+            echo "APPLE_TEAM_ID=$APPLE_TEAM_ID"
+          } >> "$GITHUB_ENV"
+          echo "macOS signing and notarization enabled"
+
+      - name: Install Windows signing certificate
+        if: matrix.platform == 'win' && steps.signing.outputs.win == 'true'
+        shell: bash
+        env:
+          WIN_CERTIFICATE: ${{ secrets.WIN_CERTIFICATE }}
+          WIN_CERTIFICATE_PASSWORD: ${{ secrets.WIN_CERTIFICATE_PASSWORD }}
+        run: |
+          set -euo pipefail
+          cert="$RUNNER_TEMP/signing-cert.pfx"
+          printf '%s' "$WIN_CERTIFICATE" | base64 --decode > "$cert"
+          {
+            echo "CSC_LINK=$cert"
+            echo "CSC_KEY_PASSWORD=$WIN_CERTIFICATE_PASSWORD"
+          } >> "$GITHUB_ENV"
+          echo "Windows signing enabled"
+
+      # --publish never: this workflow uploads the assets itself so the file
+      # list stays deterministic. electron-builder still embeds app-update.yml
+      # in the app bundle and writes the latest-*.yml update metadata to dist/.
+      - name: Build installers
+        shell: bash
+        run: npx electron-builder --publish never ${{ matrix.build_args }}
+
+      - name: List build output
+        shell: bash
+        run: ls -la dist || true
+
+      - name: Upload assets to the release
+        shell: bash
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+
+          IFS=',' read -ra patterns <<< "${{ matrix.assets }}"
+          files=()
+          for pattern in "${patterns[@]}"; do
+            pattern="$(echo "$pattern" | tr -d '[:space:]')"
+            [ -n "$pattern" ] || continue
+            for file in dist/$pattern; do
+              [ -f "$file" ] && files+=("$file")
+            done
+          done
+
+          if [ ${#files[@]} -eq 0 ]; then
+            echo "::error::No release assets matched '${{ matrix.assets }}'."
+            ls -la dist || true
+            exit 1
+          fi
+
+          # Only the installers and update metadata — not unpacked app dirs or
+          # builder-debug.yml.
+          printf 'Uploading %d file(s) to %s:\n' "${#files[@]}" "$TAG"
+          printf '  %s\n' "${files[@]}"
+          gh release upload "$TAG" "${files[@]}" --clobber

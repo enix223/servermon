@@ -168,10 +168,64 @@ node node_modules/electron/install.js
 ELECTRON_MIRROR=https://npmmirror.com/mirrors/electron/ node node_modules/electron/install.js
 ```
 
-Package a macOS app:
+Package the app for the current platform:
 
 ```bash
-npm run dist       # electron-builder -> dist/
+npm run dist                        # macOS bundle -> dist/
+npx electron-builder --win --x64    # Windows (NSIS installer)
+npx electron-builder --linux --x64  # Linux (AppImage)
+```
+
+Releases are built and attached to the GitHub release automatically — see
+[Releasing](#releasing).
+
+## Releasing
+
+`.github/workflows/release.yml` builds installers for macOS, Windows, and Linux and attaches them
+to the GitHub release that triggered it. Publish a release in the GitHub UI, or:
+
+```bash
+gh release create v0.2.0 --title v0.2.0 --notes 'What changed'
+```
+
+The workflow uploads:
+
+| Platform | Assets |
+| --- | --- |
+| macOS | `ServerMon-<version>-arm64.dmg` / `-x64.dmg`, matching `.zip` files, blockmaps, `latest-mac.yml` |
+| Windows | `ServerMon-<version>-x64.exe` (NSIS), blockmap, `latest.yml` |
+| Linux | `ServerMon-<version>-x64.AppImage`, blockmap, `latest-linux.yml` |
+
+Notes:
+
+- The matrix is `macos-latest` (builds `x64` and `arm64` in one job so a single `latest-mac.yml`
+  lists both), `windows-latest`, and `ubuntu-latest`. Platforms build in parallel and
+  `fail-fast: false` keeps one platform from cancelling the others.
+- The version comes from the release tag (`v0.2.0` → `0.2.0`), so `package.json` does not have to
+  match the tag beforehand.
+- CI passes `--publish never` and uploads with `gh release upload --clobber`, keeping the asset list
+  deterministic. electron-builder still writes `app-update.yml` into the bundle and the
+  `latest-*.yml` update metadata into `dist/`, which the in-app updater needs.
+- Run the workflow manually from the Actions tab (`workflow_dispatch`) to rebuild an existing tag.
+
+### Optional code signing
+
+Builds are unsigned unless you add these repository secrets. Nothing else needs changing.
+
+| Secret | Purpose |
+| --- | --- |
+| `MAC_CERTIFICATE` | base64-encoded Developer ID Application `.p12` |
+| `MAC_CERTIFICATE_PASSWORD` | password for the `.p12` |
+| `APPLE_ID`, `APPLE_APP_SPECIFIC_PASSWORD`, `APPLE_TEAM_ID` | notarization credentials |
+| `WIN_CERTIFICATE` | base64-encoded Authenticode `.pfx` |
+| `WIN_CERTIFICATE_PASSWORD` | password for the `.pfx` |
+
+macOS signing and notarization activate only when `MAC_CERTIFICATE` and `APPLE_ID` are both set;
+Windows signing only when `WIN_CERTIFICATE` is set. Encode a certificate for the secret with:
+
+```bash
+base64 -i path/to/cert.p12 | pbcopy     # macOS
+base64 -w0 path/to/cert.pfx             # Linux
 ```
 
 ## Usage
@@ -266,18 +320,20 @@ Settings → Application updates exposes `checkForUpdates`, `downloadUpdate`, an
 (restart + install). The main process wraps **electron-updater** behind the `AppUpdater` port.
 
 Update checks only work in packaged builds. In development the UI reports that updates are
-unavailable instead of failing silently. To enable them:
+unavailable instead of failing silently.
 
-1. Set `version` in `package.json` for each release.
-2. Configure a publish provider in `electron-builder.yml` (generic HTTP or GitHub). If you use a
-   generic feed, the generated `app-update.yml` is bundled automatically. Alternatively set
-   `SERVERMON_UPDATE_URL` at runtime to a generic feed URL.
-3. Run `npm run dist`; the macOS targets now include both `dmg` and `zip`, which electron-updater
-   needs, plus update metadata.
-4. Upload the artifacts (`dmg`, `zip`, `latest-mac.yml`, blockmaps) to the feed.
-5. macOS automatic installation requires a **signed** app; unsigned builds can check/download but
-   cannot install updates. Windows uses the NSIS installer; Linux packages use the corresponding
-   electron-updater implementation.
+`electron-builder.yml` already configures a GitHub publish provider, so the bundled `app-update.yml`
+points at this repository's releases and the updater reads `latest-mac.yml` / `latest.yml` /
+`latest-linux.yml` from the newest release. To ship an update:
+
+1. Create and publish a GitHub release — see [Releasing](#releasing). The workflow aligns the build
+   version with the tag and uploads the installers plus their `latest-*.yml` metadata.
+2. Users on an older build are offered the new version under Settings → Application updates.
+
+Keep the `dmg`, `zip`, and `latest-mac.yml` assets together on the release: the `.zip` is what the
+macOS updater downloads. macOS updates must be signed with the same Developer ID as the installed
+app, so unsigned builds can check and download but cannot install. Set `SERVERMON_UPDATE_URL` at
+runtime to point the updater at a generic feed instead of GitHub.
 
 The `AppUpdater` port has no SQL/IPC dependencies, so a web build can implement the same interface
 with deployment-version information.

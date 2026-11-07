@@ -12,7 +12,7 @@
     "build": "electron-vite build",
     "start": "electron-vite preview",
     "typecheck": "tsc --noEmit -p tsconfig.node.json && tsc --noEmit -p tsconfig.web.json",
-    "dist": "electron-vite build && electron-builder --mac",
+    "dist": "electron-vite build && electron-builder --mac --publish never",
     "mock:cluster": "node scripts/mock-k8s-server.mjs",
     "mock:aliyun": "node scripts/mock-aliyun-ecs-server.mjs",
     "verify:signature": "node --experimental-strip-types scripts/verify-aliyun-signature.ts",
@@ -39,5 +39,9 @@
     "typescript": "^7.0.2",
     "vite": "^8.3.6"
   },
-  "author": "Enix Yu"
+  "author": "Enix Yu",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/enix223/servermon.git"
+  }
 }
