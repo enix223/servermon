@@ -2,6 +2,8 @@ import type {
   ConnectionTestResult,
   EcsConnectionTestResult,
   EcsInstancesResult,
+  PodLogQuery,
+  PodLogsResult,
   PodsResult,
   UpdateState
 } from '@shared/types'
@@ -44,6 +46,8 @@ export interface SettingsRepository {
 export interface ClusterMonitor {
   testConnection(cluster: ClusterEntity): Promise<ConnectionTestResult>
   listPods(cluster: ClusterEntity): Promise<PodsResult>
+  /** Fetches pod logs on demand for the log viewer. */
+  getPodLogs(cluster: ClusterEntity, query: PodLogQuery): Promise<PodLogsResult>
   /** Drops cached clients/version info after a connection is edited or removed. */
   invalidate(clusterId: number): void
 }

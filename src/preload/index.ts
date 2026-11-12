@@ -4,6 +4,7 @@ import type {
   AppSettings,
   ClusterInput,
   EcsProfileInput,
+  PodLogQuery,
   UpdateState
 } from '@shared/types'
 
@@ -16,6 +17,8 @@ const api: ServermonApi = {
   testCluster: (input: ClusterInput, existingId?: number) =>
     ipcRenderer.invoke('clusters:test', input, existingId),
   listPods: (clusterId: number) => ipcRenderer.invoke('pods:list', clusterId),
+  getPodLogs: (clusterId: number, query: PodLogQuery) =>
+    ipcRenderer.invoke('pods:logs', clusterId, query),
   listEcsProfiles: () => ipcRenderer.invoke('ecs:profiles:list'),
   createEcsProfile: (input: EcsProfileInput) =>
     ipcRenderer.invoke('ecs:profiles:create', input),

@@ -2,7 +2,7 @@ import { useMemo, useState } from 'react'
 import type { PodInfo } from '@shared/types'
 import { formatAge } from '../lib/format'
 import { readyIsFull, statusTone } from '../lib/pods'
-import { ChevronDownIcon } from './Icons'
+import { ChevronDownIcon, LogsIcon } from './Icons'
 
 type SortKey = 'namespace' | 'name' | 'ready' | 'status' | 'restarts' | 'age' | 'node' | 'ip'
 
@@ -15,6 +15,7 @@ interface PodTableProps {
   pods: PodInfo[]
   emptyTitle: string
   emptyHint?: string
+  onViewLogs?: (pod: PodInfo) => void
 }
 
 const collator = new Intl.Collator(undefined, { numeric: true, sensitivity: 'base' })
@@ -52,7 +53,7 @@ const HEADER_CLASS =
   'sticky top-0 z-[2] border-b border-line bg-panel-2 p-0 text-left text-[10.5px] font-medium tracking-[0.06em] whitespace-nowrap text-muted uppercase'
 const CELL_CLASS = 'border-b border-line/60 px-3 py-2 align-middle whitespace-nowrap'
 
-export function PodTable({ pods, emptyTitle, emptyHint }: PodTableProps) {
+export function PodTable({ pods, emptyTitle, emptyHint, onViewLogs }: PodTableProps) {
   const [sort, setSort] = useState<SortState>({ key: 'namespace', dir: 1 })
 
   const sorted = useMemo(() => {
@@ -109,12 +110,15 @@ export function PodTable({ pods, emptyTitle, emptyHint }: PodTableProps) {
             {header('age', 'Age', 'w-[70px]')}
             {header('node', 'Node', 'w-[150px] max-w-[180px] max-[980px]:hidden')}
             {header('ip', 'IP', 'w-[120px] max-[1180px]:hidden')}
+            <th scope="col" className={`${HEADER_CLASS} w-[86px]`}>
+              <span className="sr-only">Actions</span>
+            </th>
           </tr>
         </thead>
         <tbody className="[&>tr:last-child>td]:border-b-0">
           {sorted.length === 0 ? (
             <tr>
-              <td colSpan={8}>
+              <td colSpan={9}>
                 <div className="table-empty">
                   <strong className="block text-[13px] font-semibold text-ink">{emptyTitle}</strong>
                   {emptyHint && <p className="mt-1.5 text-[11.5px] text-dim">{emptyHint}</p>}
@@ -185,6 +189,18 @@ export function PodTable({ pods, emptyTitle, emptyHint }: PodTableProps) {
                     title={pod.podIP}
                   >
                     <span className="font-mono text-[11.5px]">{pod.podIP || '—'}</span>
+                  </td>
+                  <td className={`${CELL_CLASS} w-[86px]`}>
+                    <button
+                      type="button"
+                      className="btn btn-sm h-6 gap-1 px-2 text-[10.5px]"
+                      onClick={() => onViewLogs?.(pod)}
+                      aria-label={`View logs for ${pod.name}`}
+                      data-testid="pod-logs"
+                    >
+                      <LogsIcon size={12} />
+                      Logs
+                    </button>
                   </td>
                 </tr>
               )

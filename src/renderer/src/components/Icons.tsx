@@ -211,6 +211,24 @@ export function LayersIcon({ size = 28, className }: IconProps) {
   )
 }
 
+export function LogsIcon({ size = 15, className }: IconProps) {
+  return (
+    <svg {...base(size, className)}>
+      <path d="M5 3.5h9.5L19 8v12.5H5V3.5Z" />
+      <path d="M14.5 3.5V8H19M8 12h8M8 15.5h8" />
+    </svg>
+  )
+}
+
+export function CopyIcon({ size = 15, className }: IconProps) {
+  return (
+    <svg {...base(size, className)}>
+      <rect x="9" y="9" width="11" height="12" rx="2" />
+      <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
+    </svg>
+  )
+}
+
 export function SpinnerIcon({ size = 15, className }: IconProps) {
   return (
     <svg {...base(size, className)} className={`spin ${className ?? ''}`}>

@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
-import type { ClusterRecord, PodsResult } from '@shared/types'
+import type { ClusterRecord, PodInfo, PodsResult } from '@shared/types'
+import { PodLogsModal } from './PodLogsModal'
 import { PodTable } from './PodTable'
 import { UpdatedAgo } from './UpdatedAgo'
 import { AlertIcon, ChevronDownIcon, CloseIcon, SearchIcon } from './Icons'
@@ -53,6 +54,7 @@ export function PodsView({
   const [namespace, setNamespace] = useState('all')
   const [issuesOnly, setIssuesOnly] = useState(false)
   const [showCompleted, setShowCompleted] = useState(false)
+  const [logsPod, setLogsPod] = useState<PodInfo | null>(null)
 
   const pods = result?.pods ?? []
   const stats = useMemo(() => computeStats(pods), [pods])
@@ -293,8 +295,17 @@ export function PodsView({
             pods={filtered}
             emptyTitle={emptyTitle}
             emptyHint={filtersActive ? emptyHint : undefined}
+            onViewLogs={setLogsPod}
           />
         </>
+      )}
+
+      {logsPod && (
+        <PodLogsModal
+          clusterId={cluster.id}
+          pod={logsPod}
+          onClose={() => setLogsPod(null)}
+        />
       )}
     </div>
   )

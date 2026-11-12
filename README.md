@@ -28,10 +28,13 @@ The app is structured as a multi-module console:
 - **Ops-friendly pod table** — kubectl-style statuses (`CrashLoopBackOff`, `ImagePullBackOff`,
   `OOMKilled`, `ContainerCreating`, `Terminating`, `Completed`, …), ready and restart counts,
   node, pod IP, age, search/filter/sort.
+- **Pod log viewer** — a **Logs** button on every pod opens a lazily loaded log console with a
+  container picker, previous-container logs (useful for `CrashLoopBackOff`), line limits, live
+  3-second refresh, and filtering by a start/end time range (presets or a custom `from`/`to`).
 - **Failure tolerant** — when a cluster becomes unreachable, the last successful snapshot stays
   visible with an error banner while ServerMon keeps retrying at the configured interval.
-- **Kubernetes 1.29 – 1.35** — only stable `v1` core APIs (`GET /version`, `GET /api/v1/pods`) are
-  used.
+- **Kubernetes 1.29 – 1.35** — only stable `v1` core APIs are used (`GET /version`,
+  `GET /api/v1/pods`, and `GET /api/v1/namespaces/:ns/pods/:pod/log`).
 - **Web-ready boundaries** — pages depend on an injected data API interface; SQLite lives behind a
   repository port. Both can be swapped without touching the UI or the use-case layer.
 - **Alibaba Cloud ECS via OpenAPI** — list ECS instances through the Alibaba Cloud RPC API
@@ -240,7 +243,8 @@ base64 -w0 path/to/cert.pfx             # Linux
 4. Switch to **Kubernetes → Pods**. All clusters are polled at the interval configured in
    Settings (5 seconds by default). Use the pause/play
    button for global auto-refresh, the refresh button to fetch immediately, or per-tab filters to
-   narrow the pod table.
+   narrow the pod table. Click **Logs** on a pod row to read its logs on demand; pick a container,
+   filter by `From`/`To` time, or enable **Live** to re-read the tail every 3 seconds.
 5. Editing or removing a connection only changes ServerMon's local configuration; the cluster is
    never modified.
 
@@ -288,6 +292,7 @@ Suggested REST mapping for the future web app:
 | `deleteCluster(id)` | `DELETE /api/clusters/:id` |
 | `testCluster(input, id?)` | `POST /api/clusters/test` |
 | `listPods(clusterId)` | `GET /api/clusters/:id/pods` |
+| `getPodLogs(clusterId, query)` | `GET /api/clusters/:id/logs?namespace=&pod=&container=&previous=&tailLines=&sinceTime=&endTime=` |
 | `listEcsProfiles()` | `GET /api/ecs/profiles` |
 | `createEcsProfile(input)` | `POST /api/ecs/profiles` |
 | `updateEcsProfile(id, input)` | `PUT /api/ecs/profiles/:id` |
@@ -482,6 +487,8 @@ isolated user-data directory, and verifies:
 - adding a token-authenticated cluster and a kubeconfig-authenticated cluster,
 - **Test connection** against both auth modes,
 - pod status rendering, search, issue/completed filters,
+- the lazy pod log viewer: loading on open, previous-container logs, time presets, and a custom
+  `from`/`to` range (verified line-by-line against the timestamps the mock API returns),
 - the configured auto-refresh (5 s default, by counting requests received by the mock API),
 - responsive sidebar collapse,
 - module navigation between the Kubernetes and Alibaba Cloud modules,
@@ -514,7 +521,7 @@ src/
   renderer/
     src/App.tsx
     src/data/{ApiContext,electronApi}.tsx|ts
-    src/components/{Sidebar,TopBar,ClusterTabs,PodsView,PodTable,ConfigPage,ClusterForm,…}
+    src/components/{Sidebar,TopBar,ClusterTabs,PodsView,PodTable,PodLogsModal,ConfigPage,ClusterForm,…}
     src/components/{EcsProfileTabs,EcsInstancesView,EcsInstanceTable,EcsProfilesPage,EcsProfileForm,SettingsPage,…}
     src/lib/{navigation,format,pods,ecs,ui,useEcsMonitor}.ts
     src/styles.css
@@ -539,6 +546,10 @@ docs/images/        README screenshots
 - Only bearer-token and kubeconfig authentication are supported; client-certificate auth works via
   kubeconfig.
 - Pod CPU/memory usage is not shown because it requires metrics-server and the metrics API.
+- The log viewer reads a bounded snapshot rather than a streaming `follow` connection. **Live**
+  re-reads the tail every 3 seconds. Kubernetes only accepts a lower time bound (`sinceSeconds`),
+  so the **To** time is applied to the timestamped lines after fetching; a historical range is
+  capped at 5 MB / 5,000 lines, and the viewer says when a cap cut older lines.
 - The Alibaba Cloud module polls the ECS instance inventory only. CloudMonitor metrics (CPU/memory
   graphs), disks, and networks are not shown.
 - The Alibaba Cloud module polls on its own, slower interval and only while the module is on screen,

@@ -1,12 +1,24 @@
 import * as k8s from '@kubernetes/client-node'
 import { readFileSync } from 'node:fs'
 import { homedir } from 'node:os'
-import type { ConnectionTestResult, PodInfo, PodsResult } from '@shared/types'
+import type {
+  ConnectionTestResult,
+  PodInfo,
+  PodLogLine,
+  PodLogQuery,
+  PodLogsResult,
+  PodsResult
+} from '@shared/types'
 import type { ClusterMonitor } from '../application/ports'
 import type { ClusterEntity } from '../domain/cluster'
 
 const VERSION_TTL_MS = 10 * 60 * 1000
 const REQUEST_TIMEOUT_MS = 20_000
+const LOG_TIMEOUT_MS = 30_000
+const DEFAULT_LOG_TAIL = 500
+const MAX_LOG_TAIL = 5_000
+/** Cap historical windows so a "from/to" query cannot return hundreds of MB. */
+const MAX_LOG_BYTES = 5 * 1024 * 1024
 
 interface CachedClient {
   fingerprint: string
@@ -68,6 +80,120 @@ export class KubernetesClusterMonitor implements ClusterMonitor {
         pods: [],
         fetchedAt,
         version: this.versions.get(cluster.id)?.version ?? null,
+        error: describeK8sError(error),
+        latencyMs: Date.now() - started
+      }
+    }
+  }
+
+  /**
+   * Reads a bounded slice of one container's logs. Kubernetes only supports a
+   * lower time bound (`sinceSeconds`), so the end time is applied to the
+   * timestamped lines after the fetch.
+   */
+  async getPodLogs(cluster: ClusterEntity, query: PodLogQuery): Promise<PodLogsResult> {
+    const started = Date.now()
+    const fetchedAt = new Date().toISOString()
+    const previous = query.previous === true
+    const base = {
+      clusterId: cluster.id,
+      namespace: query.namespace,
+      podName: query.podName,
+      container: query.container ?? null,
+      previous
+    }
+
+    const sinceMs = parseOptionalTime(query.sinceTime)
+    if (sinceMs === 'invalid') {
+      return {
+        ...base,
+        lines: [],
+        truncated: false,
+        fetchedAt,
+        error: 'The log start time is not a valid timestamp.',
+        latencyMs: Date.now() - started
+      }
+    }
+    const untilMs = parseOptionalTime(query.endTime)
+    if (untilMs === 'invalid') {
+      return {
+        ...base,
+        lines: [],
+        truncated: false,
+        fetchedAt,
+        error: 'The log end time is not a valid timestamp.',
+        latencyMs: Date.now() - started
+      }
+    }
+
+    const lineLimit = clampTailLines(query.tailLines)
+    // A past end time is invisible to the API: keeping only the tail would
+    // return lines newer than it. Fetch from the start of the window instead
+    // and bound the response by bytes.
+    const boundedWindow = sinceMs !== null && untilMs !== null
+    const sinceSeconds =
+      sinceMs !== null ? Math.max(1, Math.ceil((Date.now() - sinceMs) / 1000)) : undefined
+    const tailLines = boundedWindow
+      ? undefined
+      : untilMs !== null
+        ? MAX_LOG_TAIL
+        : lineLimit
+    const limitBytes = boundedWindow ? MAX_LOG_BYTES : undefined
+
+    try {
+      const kc = this.getCachedClient(cluster)
+      const api = kc.makeApiClient(k8s.CoreV1Api)
+      const raw = await withTimeout(
+        api.readNamespacedPodLog({
+          namespace: query.namespace,
+          name: query.podName,
+          container: query.container ?? undefined,
+          previous: previous || undefined,
+          timestamps: true,
+          ...(sinceSeconds !== undefined ? { sinceSeconds } : {}),
+          ...(tailLines !== undefined ? { tailLines } : {}),
+          ...(limitBytes !== undefined ? { limitBytes } : {})
+        }),
+        LOG_TIMEOUT_MS
+      )
+
+      const parsed = parseLogLines(raw)
+      let lines = parsed
+      if (sinceMs !== null) {
+        lines = lines.filter((line) => {
+          const time = logTimestampMs(line.timestamp)
+          return time === null || time >= sinceMs
+        })
+      }
+      if (untilMs !== null) {
+        lines = lines.filter((line) => {
+          const time = logTimestampMs(line.timestamp)
+          return time === null || time <= untilMs
+        })
+      }
+
+      let truncated =
+        (limitBytes !== undefined && Buffer.byteLength(raw ?? '', 'utf8') >= limitBytes) ||
+        (untilMs !== null && sinceMs === null && parsed.length >= MAX_LOG_TAIL)
+      if (lines.length > lineLimit) {
+        lines = lines.slice(-lineLimit)
+        truncated = true
+      }
+
+      return {
+        ...base,
+        lines,
+        truncated,
+        fetchedAt,
+        error: null,
+        latencyMs: Date.now() - started
+      }
+    } catch (error) {
+      return {
+        ...base,
+        lines: [],
+        truncated: false,
+        fetchedAt,
         error: describeK8sError(error),
         latencyMs: Date.now() - started
       }
@@ -240,8 +366,42 @@ function mapPod(pod: k8s.V1Pod): PodInfo {
     createdAt: createdAt instanceof Date ? createdAt.toISOString() : String(createdAt ?? ''),
     node: pod.spec?.nodeName ?? '',
     podIP: pod.status?.podIP ?? '',
-    images: containers.map((container) => container.image ?? '').filter(Boolean)
+    images: containers.map((container) => container.image ?? '').filter(Boolean),
+    containers: containers.map((container) => container.name ?? '').filter(Boolean)
   }
+}
+
+const LOG_TIMESTAMP_RE =
+  /^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2}))(?:\s|$)(.*)$/
+
+function parseOptionalTime(value: string | null | undefined): number | null | 'invalid' {
+  if (!value) return null
+  const parsed = Date.parse(value)
+  return Number.isFinite(parsed) ? parsed : 'invalid'
+}
+
+function clampTailLines(value: number | null | undefined): number {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return DEFAULT_LOG_TAIL
+  return Math.min(MAX_LOG_TAIL, Math.max(1, Math.floor(value)))
+}
+
+function parseLogLines(raw: string | null | undefined): PodLogLine[] {
+  if (!raw) return []
+  const entries = raw.split(/\r?\n/)
+  if (entries.length > 0 && entries[entries.length - 1] === '') entries.pop()
+  return entries.map((entry) => {
+    const match = LOG_TIMESTAMP_RE.exec(entry)
+    if (!match) return { timestamp: null, line: entry }
+    return { timestamp: match[1], line: match[2] }
+  })
+}
+
+function logTimestampMs(timestamp: string | null): number | null {
+  if (!timestamp) return null
+  // Kubelet emits RFC3339Nano; trim to milliseconds so Date.parse is portable.
+  const normalized = timestamp.replace(/(\.\d{3})\d+/, '$1')
+  const parsed = Date.parse(normalized)
+  return Number.isFinite(parsed) ? parsed : null
 }
 
 function extractBodyMessage(body: unknown): string | null {

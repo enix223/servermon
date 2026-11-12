@@ -47,6 +47,8 @@ export interface PodInfo {
   node: string
   podIP: string
   images: string[]
+  /** Container names, used by the log viewer's container picker. */
+  containers: string[]
 }
 
 export interface PodsResult {
@@ -55,6 +57,43 @@ export interface PodsResult {
   /** Timestamp of this fetch attempt. */
   fetchedAt: string
   version: string | null
+  error: string | null
+  latencyMs: number
+}
+
+/** Query for reading one pod's logs. Times are RFC3339, as returned by `Date#toISOString`. */
+export interface PodLogQuery {
+  namespace: string
+  podName: string
+  /** Container name. Omitted means the pod's only container. */
+  container?: string | null
+  /** Read logs from the previous terminated container instance. */
+  previous?: boolean
+  /** Maximum number of lines returned from the end of the selected window. */
+  tailLines?: number | null
+  /** Only include lines at or after this time. */
+  sinceTime?: string | null
+  /** Only include lines at or before this time. Applied after fetching. */
+  endTime?: string | null
+}
+
+export interface PodLogLine {
+  /** RFC3339 timestamp prefixed by the kubelet; null when the line has none. */
+  timestamp: string | null
+  line: string
+}
+
+export interface PodLogsResult {
+  clusterId: number
+  namespace: string
+  podName: string
+  container: string | null
+  previous: boolean
+  lines: PodLogLine[]
+  /** True when older lines were dropped by a line or byte cap. */
+  truncated: boolean
+  /** Timestamp of this fetch attempt. */
+  fetchedAt: string
   error: string | null
   latencyMs: number
 }

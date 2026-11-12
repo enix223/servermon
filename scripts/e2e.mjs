@@ -85,6 +85,23 @@ async function waitForRowCount(page, expected, timeoutMs = 20_000) {
   throw new Error(`Expected ${expected} pod rows, but found ${last}.`)
 }
 
+async function waitForLogQuery(baseUrl, predicate, timeoutMs = 10_000) {
+  const started = Date.now()
+  while (Date.now() - started < timeoutMs) {
+    const stats = await fetch(`${baseUrl}/stats`).then((response) => response.json())
+    if (stats.lastLogQuery && predicate(stats.lastLogQuery)) return stats.lastLogQuery
+    await delay(150)
+  }
+  throw new Error('Timed out waiting for the mock log endpoint to receive the query.')
+}
+
+function localDateTimeInput(date) {
+  const pad = (value) => String(value).padStart(2, '0')
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(
+    date.getHours()
+  )}:${pad(date.getMinutes())}`
+}
+
 async function main() {
   const started = await startMockServer()
   mockServer = started.child
@@ -196,6 +213,115 @@ async function main() {
   await page.getByRole('button', { name: /Show completed/ }).click()
   await waitForRowCount(page, 7)
   console.log('✓ filters work')
+
+  // Pod logs: fetched lazily when the viewer opens, not with the pod polling.
+  const logRow = page.getByTestId('pod-row').filter({ hasText: 'api-6f9c8d7b5-x2m4n' })
+  await logRow.getByTestId('pod-logs').click()
+  await page.getByTestId('log-pane').waitFor({ timeout: 15_000 })
+  await page.getByTestId('log-line').first().waitFor({ timeout: 15_000 })
+  const initialLogLines = await page.getByTestId('log-line').count()
+  assert.ok(initialLogLines > 10, `Expected log lines, but found ${initialLogLines}.`)
+  await page.getByText(/upstream timeout/).first().waitFor()
+  await page.screenshot({ path: join(screenshotsDir, '06-pod-logs.png') })
+  console.log(`✓ pod logs load lazily (${initialLogLines} lines)`)
+
+  // Previous-container logs are available because this pod has restarts.
+  await page.getByRole('button', { name: /^Previous$/ }).click()
+  await page.getByText(/previous instance crashed/).first().waitFor({ timeout: 15_000 })
+  await page.getByRole('button', { name: /^Previous$/ }).click()
+  console.log('✓ previous-container logs')
+
+  // Presets set a server-side lower bound (sinceSeconds).
+  await page.getByLabel('Time range').selectOption('5m')
+  const presetQuery = await waitForLogQuery(baseUrl, (query) => query.sinceSeconds > 0)
+  assert.ok(
+    presetQuery.sinceSeconds >= 240 && presetQuery.sinceSeconds <= 320,
+    `Expected a ~5 minute window, got sinceSeconds=${presetQuery.sinceSeconds}.`
+  )
+  assert.equal(presetQuery.timestamps, true, 'Expected timestamped log lines.')
+  await page.waitForFunction(
+    () => {
+      const count = document.querySelectorAll('[data-testid="log-line"]').length
+      return count > 0 && count < 30
+    },
+    null,
+    { timeout: 15_000 }
+  )
+  console.log(`✓ log time preset (sinceSeconds=${presetQuery.sinceSeconds})`)
+
+  // Live mode re-reads the tail every 3 seconds while the viewer is open.
+  const beforeLive = (await fetch(`${baseUrl}/stats`).then((response) => response.json()))
+    .logsRequests
+  await page.getByRole('button', { name: /^Live$/ }).click()
+  let afterLive = beforeLive
+  const liveStarted = Date.now()
+  while (afterLive <= beforeLive && Date.now() - liveStarted < 10_000) {
+    await delay(400)
+    afterLive = (await fetch(`${baseUrl}/stats`).then((response) => response.json())).logsRequests
+  }
+  assert.ok(
+    afterLive > beforeLive,
+    `Expected live log refreshes (before=${beforeLive}, after=${afterLive}).`
+  )
+  await page.getByRole('button', { name: /^Live$/ }).click()
+  console.log(`✓ live log refresh (${beforeLive} → ${afterLive} requests)`)
+
+  // Custom from/to: the end time is filtered from the timestamped lines.
+  const rangeFrom = new Date(Date.now() - 10 * 60_000)
+  const rangeTo = new Date(Date.now() - 5 * 60_000)
+  const fromInput = localDateTimeInput(rangeFrom)
+  const toInput = localDateTimeInput(rangeTo)
+  await page.getByLabel('Time range').selectOption('custom')
+  await page.getByTestId('logs-from').fill(fromInput)
+  await page.getByTestId('logs-to').fill(toInput)
+  await page.getByRole('button', { name: 'Apply' }).click()
+
+  const fromMs = Date.parse(fromInput)
+  const toMs = Date.parse(toInput)
+  // Switching to Custom pre-fills a 15 minute window and fetches immediately;
+  // wait for the applied 10 minute window instead of that first request. The
+  // input is truncated to whole minutes, so allow a little slack.
+  const expectedSince = Math.floor((Date.now() - fromMs) / 1000)
+  await waitForLogQuery(
+    baseUrl,
+    (query) => query.limitBytes > 0 && Math.abs(query.sinceSeconds - expectedSince) <= 120
+  )
+  // Old (wider-range) lines stay on screen until the applied response lands.
+  await page.waitForFunction(
+    ({ lower, upper }) => {
+      const lines = [...document.querySelectorAll('[data-testid="log-line"]')]
+      return (
+        lines.length > 0 &&
+        lines.every((element) => {
+          const raw = element.getAttribute('data-timestamp')
+          if (!raw) return true
+          const value = Date.parse(raw)
+          return value >= lower && value <= upper
+        })
+      )
+    },
+    { lower: fromMs, upper: toMs },
+    { timeout: 15_000 }
+  )
+  const lineTimestamps = await page
+    .getByTestId('log-line')
+    .evaluateAll((elements) =>
+      elements.map((element) => element.getAttribute('data-timestamp')).filter(Boolean)
+    )
+  assert.ok(lineTimestamps.length > 0, 'Expected log lines inside the custom range.')
+  for (const timestamp of lineTimestamps) {
+    const value = Date.parse(timestamp)
+    assert.ok(
+      value >= fromMs && value <= toMs,
+      `Log line ${timestamp} is outside the requested ${fromInput} – ${toInput} range.`
+    )
+  }
+  await page.screenshot({ path: join(screenshotsDir, '06-pod-logs-range.png') })
+  console.log(`✓ custom log range filtered (${lineTimestamps.length} lines)`)
+
+  await page.getByRole('button', { name: 'Close' }).click()
+  await page.getByTestId('log-pane').waitFor({ state: 'detached' })
+  console.log('✓ log viewer closed')
 
   // Auto-refresh: wait beyond the 5s interval and confirm another pods request hit the API.
   const before = await fetch(`${baseUrl}/stats`).then((response) => response.json())

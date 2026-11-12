@@ -5,13 +5,29 @@ import { CloseIcon } from './Icons'
 interface ModalProps {
   title: string
   subtitle?: string
-  size?: 'sm' | 'md'
+  size?: 'sm' | 'md' | 'lg'
   onClose: () => void
   children: ReactNode
   footer?: ReactNode
+  /** Extra classes for the scrollable body, e.g. to turn it into a flex container. */
+  bodyClassName?: string
 }
 
-export function Modal({ title, subtitle, size = 'md', onClose, children, footer }: ModalProps) {
+function sizeClass(size: 'sm' | 'md' | 'lg'): string {
+  if (size === 'sm') return 'modal-sm'
+  if (size === 'lg') return 'modal-lg'
+  return ''
+}
+
+export function Modal({
+  title,
+  subtitle,
+  size = 'md',
+  onClose,
+  children,
+  footer,
+  bodyClassName
+}: ModalProps) {
   useEffect(() => {
     function onKeyDown(event: KeyboardEvent): void {
       if (event.key === 'Escape') onClose()
@@ -23,7 +39,7 @@ export function Modal({ title, subtitle, size = 'md', onClose, children, footer 
   return createPortal(
     <div className="modal-backdrop">
       <div
-        className={`modal ${size === 'sm' ? 'modal-sm' : ''}`}
+        className={`modal ${sizeClass(size)}`}
         role="dialog"
         aria-modal="true"
         aria-label={title}
@@ -37,7 +53,7 @@ export function Modal({ title, subtitle, size = 'md', onClose, children, footer 
             <CloseIcon />
           </button>
         </div>
-        <div className="modal-body">{children}</div>
+        <div className={`modal-body ${bodyClassName ?? ''}`}>{children}</div>
         {footer && <div className="modal-foot">{footer}</div>}
       </div>
     </div>,

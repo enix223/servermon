@@ -8,6 +8,8 @@ import type {
   EcsInstancesResult,
   EcsProfileInput,
   EcsProfileRecord,
+  PodLogQuery,
+  PodLogsResult,
   PodsResult,
   UpdateState
 } from './types'
@@ -26,6 +28,7 @@ import type {
  *   DELETE /api/clusters/:id
  *   POST   /api/clusters/test
  *   GET    /api/clusters/:id/pods
+ *   GET    /api/clusters/:id/logs?namespace=&pod=&container=&previous=&tailLines=&sinceTime=&endTime=
  *   GET    /api/ecs/profiles
  *   POST   /api/ecs/profiles
  *   PUT    /api/ecs/profiles/:id
@@ -48,6 +51,11 @@ export interface ServermonApi {
    */
   testCluster(input: ClusterInput, existingId?: number): Promise<ConnectionTestResult>
   listPods(clusterId: number): Promise<PodsResult>
+  /**
+   * Reads a pod's logs on demand. Called lazily when the log viewer opens or
+   * refreshes, never as part of pod polling.
+   */
+  getPodLogs(clusterId: number, query: PodLogQuery): Promise<PodLogsResult>
 
   listEcsProfiles(): Promise<EcsProfileRecord[]>
   createEcsProfile(input: EcsProfileInput): Promise<EcsProfileRecord>

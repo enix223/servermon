@@ -9,7 +9,13 @@ const SEMVER = VERSION.replace(/^v/, '').split('.')
 const startedAt = Date.now()
 const iso = (msAgo) => new Date(startedAt - msAgo).toISOString()
 
-const stats = { podsRequests: 0, versionRequests: 0, unauthorized: 0 }
+const stats = {
+  podsRequests: 0,
+  versionRequests: 0,
+  logsRequests: 0,
+  unauthorized: 0,
+  lastLogQuery: null
+}
 
 function containerStatus({ phase, ready, restarts, waitingReason, terminatedReason, image }) {
   const status = {
@@ -157,6 +163,32 @@ const pods = [
   })
 ]
 
+/** Deterministic log stream ending at server start, ~80 lines at 20 s intervals. */
+function generateLogs(pod, previous) {
+  const name = pod.metadata.name
+  const count = 80
+  const lines = []
+  for (let index = 0; index < count; index += 1) {
+    const at = startedAt - (count - 1 - index) * 20_000
+    const stamp = new Date(at).toISOString()
+    let level = 'INFO'
+    let message = `${name} tick=${index} serving on :8080`
+    if (index === count - 3) {
+      level = 'WARN'
+      message = `${name} slow request 1203ms`
+    } else if (index === count - 1) {
+      level = 'ERROR'
+      message = `${name} request failed: upstream timeout`
+    }
+    if (previous) {
+      level = 'ERROR'
+      message = `${name} previous instance crashed: simulated failure`
+    }
+    lines.push(`${stamp} ${level} ${message}`)
+  }
+  return lines
+}
+
 function send(response, statusCode, body) {
   const payload = JSON.stringify(body)
   response.writeHead(statusCode, {
@@ -223,6 +255,74 @@ const server = createServer((request, response) => {
         items
       })
     }, 40)
+    return
+  }
+
+  const logMatch = url.pathname.match(/^\/api\/v1\/namespaces\/([^/]+)\/pods\/([^/]+)\/log$/)
+  if (logMatch && request.method === 'GET') {
+    stats.logsRequests += 1
+    const namespace = decodeURIComponent(logMatch[1])
+    const podName = decodeURIComponent(logMatch[2])
+    const container = url.searchParams.get('container')
+    const previous = url.searchParams.get('previous') === 'true'
+    const timestamps = url.searchParams.get('timestamps') === 'true'
+    const tailLines = Number(url.searchParams.get('tailLines') || 0)
+    const sinceSeconds = Number(url.searchParams.get('sinceSeconds') || 0)
+    const limitBytes = Number(url.searchParams.get('limitBytes') || 0)
+    stats.lastLogQuery = { namespace, podName, container, previous, timestamps, tailLines, sinceSeconds, limitBytes }
+
+    const pod = pods.find(
+      (item) => item.metadata.namespace === namespace && item.metadata.name === podName
+    )
+    if (!pod) {
+      send(response, 404, {
+        kind: 'Status',
+        apiVersion: 'v1',
+        status: 'Failure',
+        message: `pods "${podName}" not found`,
+        reason: 'NotFound',
+        code: 404
+      })
+      return
+    }
+    if (container && container !== 'main') {
+      send(response, 400, {
+        kind: 'Status',
+        apiVersion: 'v1',
+        status: 'Failure',
+        message: `container ${container} is not valid for pod ${podName}`,
+        reason: 'BadRequest',
+        code: 400
+      })
+      return
+    }
+    if (previous && (pod.status.containerStatuses?.[0]?.restartCount ?? 0) === 0) {
+      send(response, 400, {
+        kind: 'Status',
+        apiVersion: 'v1',
+        status: 'Failure',
+        message: `previous terminated container "main" in pod "${podName}" not found`,
+        reason: 'BadRequest',
+        code: 400
+      })
+      return
+    }
+
+    let lines = generateLogs(pod, previous)
+    if (sinceSeconds > 0) {
+      const cutoff = Date.now() - sinceSeconds * 1000
+      lines = lines.filter((line) => Date.parse(line.slice(0, line.indexOf(' '))) >= cutoff)
+    }
+    if (tailLines > 0) lines = lines.slice(-tailLines)
+    let body = lines.length > 0 ? `${lines.join('\n')}\n` : ''
+    if (!timestamps) body = body.replace(/^\S+ /gm, '')
+    if (limitBytes > 0) body = Buffer.from(body).subarray(0, limitBytes).toString('utf8')
+
+    response.writeHead(200, {
+      'content-type': 'text/plain',
+      'content-length': Buffer.byteLength(body)
+    })
+    response.end(body)
     return
   }
 
